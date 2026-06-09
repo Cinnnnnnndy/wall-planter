@@ -1,6 +1,8 @@
 import pathlib
+import sys
 
-stl_path = pathlib.Path("planter_v4.stl")
+# 用法: python3 build_viewer.py [planter_v5.stl]
+stl_path = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "planter_v5.stl")
 stl_text = stl_path.read_text()
 
 # Safety: STL ASCII never contains "</script" but guard anyway
@@ -11,7 +13,7 @@ html = '''<!DOCTYPE html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Wall Planter v4 — 3D 预览</title>
+<title>Wall Planter v5 — 3D 预览</title>
 <style>
   :root { --bg:#1a1c20; --panel:#23262c; --txt:#e6e8eb; --muted:#9aa0a8; --accent:#6cc08b; }
   * { box-sizing:border-box; }
@@ -40,7 +42,7 @@ html = '''<!DOCTYPE html>
 <div id="app"></div>
 <div id="loading">加载模型中…</div>
 <div id="hud">
-  <h1>Wall Planter v4</h1>
+  <h1>Wall Planter v5</h1>
   <div>尺寸 <span class="dim" id="dims">—</span></div>
   <div class="muted">
     <kbd>拖拽</kbd> 旋转 · <kbd>滚轮</kbd> 缩放 · <kbd>右键</kbd> 平移
