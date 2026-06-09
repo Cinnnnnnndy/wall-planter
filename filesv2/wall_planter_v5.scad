@@ -28,7 +28,7 @@ res_h     = 32;      // 储水区高(箱体下部)
 /* [灌溉/孔] */
 drain_d   = 8;       // 盆底排水孔(->储水区)
 overflow_d= 12;      // 溢流标管内径(->下层, 底层塞橡胶塞)
-water_h   = 16;      // 储水水位(标管高, < res_h-wall)
+water_h   = 18;      // 储水水位(标管高, < res_h-2*wall)
 vent_d    = 6;       // 背面透气孔
 vent_n    = 3;
 
@@ -63,6 +63,7 @@ mod_d  = op_y + (out_top/2)*az + 10;     // 前向总深(含悬伸)
 mod_h  = op_z + (out_top/2)*ay + 12;     // 总高
 
 floor_z = p0z + floor_t;                 // 盆内水平底高度(可拆盆坐此)
+vent_z  = res_h + 30;                     // 背面透气孔高度(盆根上沿区)
 
 // 斜置圆台: 从局部原点沿盆轴(+Y上翘)伸出
 module frustum(d1, d2, len) {
@@ -106,9 +107,9 @@ module unit() {
                 translate([cx, p0y + 5, wall + 1])
                     cylinder(h = floor_z, d = drain_d);
 
-                // 4) 背面透气孔(箱体上部, 盆根上沿一圈)
+                // 4) 背面透气孔(箱体上部, 盆根上沿一圈, 穿背板进盆腔给根透气)
                 for (k = [0 : vent_n-1])
-                    translate([cx + (k - (vent_n-1)/2)*32, -0.5, res_h + 22])
+                    translate([cx + (k - (vent_n-1)/2)*32, -0.5, vent_z])
                         rotate([-90, 0, 0]) cylinder(h = box_d + 1, d = vent_d);
 
                 // 5) 箱体顶后沿半圆缺口(给上层水路/透气让位)
@@ -146,5 +147,14 @@ module unit() {
 }
 
 unit();
-echo(str("单元 W x D x H = ", mod_w, " x ", mod_d, " x ", mod_h, " mm  (需 ≤240)"));
-echo(str("箱体深 box_d = ", box_d, "  储水区高 res_h = ", res_h, "  水位 ", water_h));
+
+// ---- 尺寸 / 配合 自检(对标拓竹P2S ≤240, 可拆盆 148/Ø131.2/Ø93.2) ----
+echo(str("单元 W x D x H = ", mod_w, " x ", mod_d, " x ", mod_h, " mm"));
+echo(str("各轴 ≤240 ? W=", mod_w<=240, " D=", mod_d<=240, " H=", mod_h<=240,
+         "  (P2S 有效256, 留余量)"));
+echo(str("盆径向单边间隙: 底=", (in_bot-pot_bot_d)/2, " 口=", (in_top-pot_top_d)/2, " mm"));
+echo(str("腔轴向长 cup_len=", cup_len, " mm  vs 盆高=", pot_height,
+         " -> 余量 ", cup_len-pot_height, " mm(盆口微缩进)"));
+echo(str("储水区: 高 res_h=", res_h, "  水位 water_h=", water_h,
+         "  溢流余量 ", res_h-2*wall-water_h, " mm  (>0 OK)"));
+echo(str("背板厚 back_t=", back_t, "  箱体深 box_d=", box_d, "  透气孔高 vent_z=", vent_z));
