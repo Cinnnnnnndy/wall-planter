@@ -12,7 +12,15 @@
 ## 当前文件
 - **`filesv2/wall_planter_v4.scad`** — 当前基础(单元 164×183×191mm,三轴 ≤240,`Volumes=2`)。
 - `filesv2/planter_v4.stl` — 导出的可打印件。
+- **`filesv2/viewer.html`** — 浏览器内 3D 预览(模型已内嵌,**双击即可打开**,无需本地服务器)。
+- `filesv2/build_viewer.py` — 把最新 STL 重新内嵌进 `viewer.html` 的脚本。
 - `filesv2/PROMPT.md` — 几何形态描述 + 已完成/待办清单。
+
+## 在 HTML 里预览模型
+直接双击 `filesv2/viewer.html`(或拖进浏览器)即可旋转/缩放查看 `planter_v4.stl`:
+- 拖拽旋转 · 滚轮缩放 · 右键平移;按钮可切换 自动旋转 / 线框 / 显示边 / 复位视角,并显示外形尺寸。
+- 模型已以纯文本内嵌进 HTML,**离线可用**;Three.js 运行库从 CDN 加载,首次打开需联网。
+- 重新导出 STL 后,在 `filesv2/` 里跑 `python3 build_viewer.py` 重新生成内嵌数据。
 - `files/SPEC.md`、`files/CLAUDE.md` — 设计目标与建模迭代规范。
 - `files/` 内为早期 v2 迭代(竖切开口版),供参考。
 
