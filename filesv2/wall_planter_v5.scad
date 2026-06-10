@@ -90,7 +90,12 @@ cx     = mod_w/2;
 front_y= op_y + (out_top/2)*az;          // 盆口(外)最前缘 Y
 mod_d  = front_y + 8;                     // 前向总深(以盆口前缘计)
 tot_d  = mod_d - back_y;                  // 真实进深(含后伸 stub), 供尺寸核对
-mod_h  = op_z + (out_top/2)*ay + 6;       // 总高
+
+// 箱顶高于花盆最高点 -> 盆上沿低于箱体高度(堆叠时箱顶平整不顶盆)
+apex_mouth = p0z + cup_len2*az + (od1/2)*ay;       // 盆口外伸管顶
+apex_lip   = op_z + ((out_top + 2*lip_w)/2)*ay;    // 挡土唇顶
+top_margin = 8;
+mod_h  = max(apex_mouth, apex_lip) + top_margin;    // 总高
 
 vent_z = p0z + 8;                        // 背面透气孔高度(盆根上沿区)
 
