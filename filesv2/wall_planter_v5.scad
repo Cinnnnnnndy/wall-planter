@@ -23,18 +23,30 @@ mouth_ext = 16;      // 盆口端外伸(确保口完整张开)
 /* [薄长方体箱] */
 back_t    = 6;       // 背板厚(盆腔后界, 留完整背面只开透气孔)
 side_gap  = 12;      // 锥盆两侧到箱边距
-res_h     = 14;      // 储水区净高(箱体下部, 在盆底下缘之下)
+res_h     = 18;      // 储水区净高(需 > 水位+进水缝+帽厚, 给防虹吸帽留空间)
 
 /* [灌溉/孔] */
 drain_d   = 8;       // 盆底排水孔(盆腔最低点 -> 储水区)
 overflow_d= 12;      // 溢流标管内径(->下层, 底层塞橡胶塞)
-water_h   = 9;       // 储水水位(标管高, < res_h)
+water_h   = 10;      // 储水水位(标管高, < res_h - 进水缝 - 帽厚)
 vent_d    = 6;       // 背面透气孔
 vent_n    = 3;
+
+/* [盆口挡土唇 / 滴水线] */
+lip_w    = 6;        // 挡土唇外翻半径增量(开口处外法兰, 不缩小通孔, 不挡插盆)
+lip_t    = 4;        // 唇厚(沿轴)
+drip_w   = 1.6;      // 滴水槽环宽
+drip_d2  = 2.2;      // 滴水槽深(法兰下缘断流, 水滴落不回爬)
+
+/* [储水盒防虹吸] */
+siphon_gap = 3;      // 标管顶 ↔ 防虹吸帽 进水缝高(进气断虹吸)
+cap_t      = 2.5;    // 帽厚
+cap_on     = true;
 
 /* [堆叠/横拼定位] */
 peg_d     = 8;       // 上下堆叠销径
 peg_clear = 0.3;
+peg_taper = 2.4;     // 销顶缩径(锥销, 自对中易插)
 tile_peg_d= 7;       // 左右横拼销径
 tile_h    = 6;       // 横拼销长
 
@@ -58,10 +70,6 @@ p0z    = wall + res_h + floor_t*(1-az) + r_in*ay;
 
 drip_y = p0y + floor_t*ay + r_in*az;     // 盆腔最低点(座面底盘 +Y 下缘)Y
 drip_z = p0z + floor_t*az - r_in*ay;     // 盆腔最低点 z (= wall+res_h+floor_t)
-box_d  = ceil(drip_y + wall + 5);        // 箱深: 兜住盆底下缘, 储水区在其正下方
-
-mod_w  = out_top + 2*side_gap;           // 箱宽
-cx     = mod_w/2;
 
 cup_len2  = floor_t + pot_height + mouth_ext;        // 外锥总轴长
 seat_top  = floor_t + pot_height;                    // 盆口处轴向位置(自 p0)
@@ -70,10 +78,24 @@ od1 = (in_top + rate*mouth_ext) + 2*wall;            // 外锥 s=cup_len2 处外
 
 op_y   = p0y + seat_top*ay;              // 盆口中心 Y
 op_z   = p0z + seat_top*az;              // 盆口中心 Z
+
+// 箱深: 把锥管尽量包进箱体(穿插最大化), 前伸到盆口"后缘"附近 ->
+//       满载质心落在底面内、减小前伸悬挑、保证重心; 同时不小于兜住盆底所需。
+op_back_y    = op_y - (out_top/2)*az;    // 盆口(外)最后缘 Y
+front_reveal = 3;                        // 盆口处留少量裸管, 避免箱面切到口
+box_d  = max(ceil(drip_y + wall + 5), ceil(op_back_y - front_reveal));
+
+mod_w  = out_top + 2*side_gap;           // 箱宽
+cx     = mod_w/2;
+
 mod_d  = op_y + (out_top/2)*az + 8;      // 前向总深(含悬伸)
 mod_h  = op_z + (out_top/2)*ay + 6;      // 总高
 
 vent_z = p0z + 8;                        // 背面透气孔高度(盆根上沿区)
+
+// 上下堆叠销位: **非对称** -> 防呆(转 180° 错叠对不上孔)
+peg_xs = [mod_w*0.27, mod_w*0.70];
+peg_y  = back_t/2 + 1;                    // 销/孔落在背板带内
 
 // 斜置圆台: 从局部原点沿盆轴(+Y上翘)伸出
 module frustum(d1, d2, len) {
@@ -96,12 +118,15 @@ module pot_real() {
     translate([cx, p0y, p0z]) along(floor_t) frustum(pot_bot_d, pot_top_d, pot_height);
 }
 
-// ---- 外形实体: 薄长方体 ∪ 穿插的斜锥(背/底平切) ----------------------
+// ---- 外形实体: 长方体 ∪ 穿插斜锥(背/底平切) ∪ 盆口挡土唇 ---------------
 module outer() {
     union() {
         cube([mod_w, box_d, mod_h]);                         // 长方体脊柱箱
         clip_box()
             translate([cx, p0y, p0z]) frustum(od0, od1, cup_len2);
+        // 盆口挡土唇: 开口处外翻法兰(增大外径, 通孔不变 -> 不挡插盆, 挡土/导滴)
+        translate([cx, p0y, p0z]) along(seat_top)
+            frustum(out_top + 2*lip_w, out_top + 2*lip_w, lip_t);
     }
 }
 
@@ -116,7 +141,15 @@ module unit() {
                 translate([cx, p0y, p0z]) along(floor_t)
                     frustum(in_bot, in_top, pot_height);
                 translate([cx, p0y, p0z]) along(seat_top)
-                    frustum(in_top, in_top + rate*mouth_ext, mouth_ext + 0.1);
+                    frustum(in_top, in_top + rate*(mouth_ext + lip_t), mouth_ext + lip_t + 0.1);
+
+                // 1b) 滴水线: 挡土唇外柱面一圈环槽(切到法兰外径之外, 明确向外开口),
+                //     水沿唇外缘到此处断流滴落, 不沿底面回爬到箱体。
+                translate([cx, p0y, p0z]) along(seat_top + lip_t - drip_w - 0.6)
+                    difference() {
+                        frustum(out_top + 2*lip_w + 6, out_top + 2*lip_w + 6, drip_w);
+                        frustum(out_top + 2*lip_w - 2*drip_d2, out_top + 2*lip_w - 2*drip_d2, 3*drip_w);
+                    }
 
                 // 2) 储水区内腔(箱体下部封闭盒: 留四壁+底+顶盖), 在盆底下缘之下
                 translate([wall, wall, wall])
@@ -135,9 +168,10 @@ module unit() {
                 translate([cx, back_t/2 + 1, mod_h]) rotate([0, 90, 0])
                     cylinder(h = mod_w + 2, d = 26, center = true);
 
-                // 6) 上下堆叠: 顶面定位孔(背板带内)
-                for (sx = [mod_w*0.22, mod_w*0.78])
-                    translate([sx, back_t/2 + 1, mod_h - 9]) cylinder(h = 10, d = peg_d + peg_clear);
+                // 6) 上下堆叠: 顶面定位孔(背板带内, 非对称防呆; 顶口扩成锥孔便于导入)
+                for (sx = peg_xs)
+                    translate([sx, peg_y, mod_h - 9])
+                        cylinder(h = 10.1, d1 = peg_d + peg_clear, d2 = peg_d + peg_clear + 1.6);
 
                 // 7) 左右横拼: 左侧面定位孔(背板厚度内)
                 for (sz = [res_h, mod_h*0.62])
@@ -145,13 +179,23 @@ module unit() {
                         rotate([0, 90, 0]) cylinder(h = tile_h + 1, d = tile_peg_d + peg_clear);
             }
 
-            // 8) 溢流标管(储水区内, 顶=水位)
-            translate([cx, box_d*0.5, wall - 0.01])
-                cylinder(h = water_h, d = overflow_d + 2*wall);
+            // 8) 溢流标管 + 防虹吸帽: 标管顶=水位; 帽架在 siphon_gap 进水缝上,
+            //    水从侧缝越过管顶进内孔, 缝口进气断虹吸, 不会把储水抽空。
+            translate([cx, box_d*0.5, wall - 0.01]) {
+                cylinder(h = water_h, d = overflow_d + 2*wall);                 // 标管
+                if (cap_on) {
+                    for (a = [0:120:359])                                      // 3 立柱(留侧缝)
+                        rotate([0, 0, a]) translate([(overflow_d + 2*wall)/2 - 1.2, -1.5, water_h - 0.01])
+                            cube([2.4, 3, siphon_gap + 0.02]);
+                    translate([0, 0, water_h + siphon_gap])                    // 防虹吸帽
+                        cylinder(h = cap_t, d = overflow_d + 2*wall + 6);
+                }
+            }
 
-            // 9) 上下堆叠: 底面定位销
-            for (sx = [mod_w*0.22, mod_w*0.78])
-                translate([sx, back_t/2 + 1, -7]) cylinder(h = 8, d = peg_d);
+            // 9) 上下堆叠: 底面定位**锥销**(顶缩径, 自对中; 非对称防呆)
+            for (sx = peg_xs)
+                translate([sx, peg_y, -7])
+                    cylinder(h = 8, d1 = peg_d, d2 = peg_d - peg_taper);
 
             // 10) 左右横拼: 右侧面定位销
             for (sz = [res_h, mod_h*0.62])
