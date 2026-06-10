@@ -34,6 +34,11 @@ water_h   = 10;      // 储水水位(标管高, < res_h - 进水缝 - 帽厚)
 vent_d    = 6;       // 背面透气孔
 vent_n    = 3;
 
+/* [逐层淌水: 前伸导流嘴] 把溢流从前壁导到下层盆口正上方 */
+spout_id    = 8;     // 导流道内径
+spout_extra = 14;    // 滴水点伸进下层盆口后缘之内的量
+drip_out_d  = 7;     // 嘴端向下滴孔径(底层塞此孔)
+
 /* [盆口挡土唇 / 滴水线] */
 lip_w    = 6;        // 挡土唇外翻半径增量(开口处外法兰, 不缩小通孔, 不挡插盆)
 lip_t    = 4;        // 唇厚(沿轴)
@@ -98,6 +103,15 @@ top_margin = 8;
 mod_h  = max(apex_mouth, apex_lip) + top_margin;    // 总高
 
 vent_z = p0z + 8;                        // 背面透气孔高度(盆根上沿区)
+
+// 前伸导流嘴: 标管移到储水盒前壁, 溢流经前壁→导流臂→嘴端向下滴入"下层盆口"
+sp_od  = overflow_d + 2*wall;            // 标管外径
+sp_y   = box_d - wall - sp_od/2 + 1;     // 标管中心 Y(并入前壁)
+ch_z   = wall + spout_id/2 + 0.5;        // 导流道中心高
+ch_top = ch_z + spout_id/2 + wall;       // 导流臂顶高
+op_back_rim = op_y - (out_top/2)*az;     // 下层盆口(外)后缘 Y(对齐目标)
+spout_y = op_back_rim + spout_extra;     // 嘴端滴水点 Y(伸进下层盆口内)
+spout_od= spout_id + 2*wall;             // 导流臂外径
 
 // 上下堆叠销位: **非对称** -> 防呆(转 180° 错叠对不上孔)
 peg_xs = [mod_w*0.27, mod_w*0.70];
@@ -185,17 +199,21 @@ module unit() {
                         rotate([0, 90, 0]) cylinder(h = tile_h + 1, d = tile_peg_d + peg_clear);
             }
 
-            // 8) 溢流标管 + 防虹吸帽: 标管顶=水位; 帽架在 siphon_gap 进水缝上,
-            //    水从侧缝越过管顶进内孔, 缝口进气断虹吸, 不会把储水抽空。
-            translate([cx, box_d*0.5, wall - 0.01]) {
-                cylinder(h = water_h, d = overflow_d + 2*wall);                 // 标管
+            // 8) 溢流标管(并入储水盒前壁) + 防虹吸帽 + 前伸导流嘴
+            translate([cx, sp_y, wall - 0.01]) {
+                cylinder(h = water_h, d = sp_od);                              // 标管
                 if (cap_on) {
                     for (a = [0:120:359])                                      // 3 立柱(留侧缝)
-                        rotate([0, 0, a]) translate([(overflow_d + 2*wall)/2 - 1.2, -1.5, water_h - 0.01])
+                        rotate([0, 0, a]) translate([sp_od/2 - 1.2, -1.5, water_h - 0.01])
                             cube([2.4, 3, siphon_gap + 0.02]);
                     translate([0, 0, water_h + siphon_gap])                    // 防虹吸帽
-                        cylinder(h = cap_t, d = overflow_d + 2*wall + 6);
+                        cylinder(h = cap_t, d = sp_od + 6);
                 }
+            }
+            // 导流臂(实体): 从标管前壁前伸到下层盆口上方(内部水道后面挖)
+            hull() {
+                translate([cx, sp_y,    0]) cylinder(h = ch_top, d = sp_od);
+                translate([cx, spout_y, 0]) cylinder(h = ch_top, d = spout_od);
             }
 
             // 9) 上下堆叠: 底面定位**锥销**(顶缩径, 自对中; 非对称防呆)
@@ -209,9 +227,14 @@ module unit() {
                     rotate([0, 90, 0]) cylinder(h = tile_h, d = tile_peg_d);
         }
 
-        // 11) 标管内孔贯穿到底(储水区 -> 下层; 底层塞橡胶塞)
-        translate([cx, box_d*0.5, -0.5])
-            cylinder(h = water_h + wall + 1, d = overflow_d);
+        // 11) 溢流水路: 标管竖孔(顶=水位) -> 前伸水道 -> 嘴端向下滴孔
+        //     直叠时嘴端正对"下层盆口", 水滴进下层花盆; 底层塞嘴端滴孔。
+        translate([cx, sp_y, ch_z - 0.01])
+            cylinder(h = water_h + wall, d = overflow_d);                      // 标管竖孔
+        translate([cx, sp_y, ch_z]) rotate([-90, 0, 0])
+            cylinder(h = spout_y - sp_y + 0.1, d = spout_id);                  // 前伸水道
+        translate([cx, spout_y, -0.5])
+            cylinder(h = ch_z + spout_id/2 + 1, d = drip_out_d);              // 嘴端向下滴孔
     }
 }
 
