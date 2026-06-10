@@ -20,8 +20,10 @@ wall      = 3.0;     // 盆壁/箱壁厚
 floor_t   = 6;       // 盆底厚(承可拆盆, 沿轴方向的座厚)
 mouth_ext = 16;      // 盆口端外伸(确保口完整张开)
 
-/* [薄长方体箱] */
-back_t    = 6;       // 背板厚(盆腔后界, 留完整背面只开透气孔)
+/* [长方体箱 + 花盆后伸] */
+box_d     = 66;      // 箱体深度(向前缩减; 花盆盆底从后面伸出一部分)
+pot_back  = 18;      // 盆底盘(外)伸出箱背 Y=0 的量(0=不伸出/平背)
+back_t    = 6;       // 背板带厚(透气孔/堆叠定位参考)
 side_gap  = 12;      // 锥盆两侧到箱边距
 res_h     = 18;      // 储水区净高(需 > 水位+进水缝+帽厚, 给防虹吸帽留空间)
 
@@ -57,19 +59,22 @@ $fn = dev ? 40 : 96;
 // ---- 派生 ----------------------------------------------------------
 in_bot  = pot_bot_d + 2*fit_clear;       // 内腔底径(与盆底同心+间隙)
 in_top  = pot_top_d + 2*fit_clear;       // 内腔口径
+out_bot = in_bot + 2*wall;               // 盆底端外径(座处管外径)
 out_top = in_top + 2*wall;               // 开口端外径(用于尺寸/侧距)
 ay = cos(tilt); az = sin(tilt);          // 盆轴方向 (0, ay, az)
 rate = (pot_top_d - pot_bot_d) / pot_height;  // 花盆锥度 (dia/轴长)
 r_in = in_bot/2;
+r_out= out_bot/2;
 
-// 盆底盘(窄端 s=0, 实际座面在 s=floor_t)中心位置:
-//  - 背面: 盆腔后缘留 back_t 完整平背板
-//  - 底部: 盆腔最低点 ~ (wall+res_h+floor_t), 其下做封闭储水区
-p0y    = back_t + r_in*az;
+// 盆底盘(窄端 s=0, 座面在 s=floor_t)中心:
+//  - Y: 由"盆底外缘伸出箱背 pot_back"反推 (允许锥盆从后面穿出)
+//  - z: 盆腔最低点 = wall+res_h+floor_t, 其下做封闭储水区
+p0y    = r_out*az - floor_t*ay - pot_back;
 p0z    = wall + res_h + floor_t*(1-az) + r_in*ay;
 
-drip_y = p0y + floor_t*ay + r_in*az;     // 盆腔最低点(座面底盘 +Y 下缘)Y
+drip_y = p0y + floor_t*ay + r_in*az;     // 盆腔最低点(排水点) Y(应落在箱内)
 drip_z = p0z + floor_t*az - r_in*ay;     // 盆腔最低点 z (= wall+res_h+floor_t)
+back_y = p0y + floor_t*ay - r_out*az;    // 盆底(外)最后缘 Y (= -pot_back, 伸出箱背)
 
 cup_len2  = floor_t + pot_height + mouth_ext;        // 外锥总轴长
 seat_top  = floor_t + pot_height;                    // 盆口处轴向位置(自 p0)
@@ -79,17 +84,13 @@ od1 = (in_top + rate*mouth_ext) + 2*wall;            // 外锥 s=cup_len2 处外
 op_y   = p0y + seat_top*ay;              // 盆口中心 Y
 op_z   = p0z + seat_top*az;              // 盆口中心 Z
 
-// 箱深: 把锥管尽量包进箱体(穿插最大化), 前伸到盆口"后缘"附近 ->
-//       满载质心落在底面内、减小前伸悬挑、保证重心; 同时不小于兜住盆底所需。
-op_back_y    = op_y - (out_top/2)*az;    // 盆口(外)最后缘 Y
-front_reveal = 3;                        // 盆口处留少量裸管, 避免箱面切到口
-box_d  = max(ceil(drip_y + wall + 5), ceil(op_back_y - front_reveal));
-
 mod_w  = out_top + 2*side_gap;           // 箱宽
 cx     = mod_w/2;
 
-mod_d  = op_y + (out_top/2)*az + 8;      // 前向总深(含悬伸)
-mod_h  = op_z + (out_top/2)*ay + 6;      // 总高
+front_y= op_y + (out_top/2)*az;          // 盆口(外)最前缘 Y
+mod_d  = front_y + 8;                     // 前向总深(以盆口前缘计)
+tot_d  = mod_d - back_y;                  // 真实进深(含后伸 stub), 供尺寸核对
+mod_h  = op_z + (out_top/2)*ay + 6;       // 总高
 
 vent_z = p0z + 8;                        // 背面透气孔高度(盆根上沿区)
 
@@ -105,11 +106,11 @@ module frustum(d1, d2, len) {
 // 沿盆轴方向平移(把"座厚"沿轴让出, 留垂直于轴的平底座)
 module along(d) { translate([0, d*ay, d*az]) children(); }
 
-// 把 children 沿 Y>=0 与 Z>=0 平切(背/底与箱体齐平, 不外溢)
+// 仅沿 Z>=0 平切(底面齐平); Y 方向不切 -> 允许锥盆从背面 Y<0 穿出
 module clip_box() {
     intersection() {
         children();
-        translate([-1, 0, 0]) cube([mod_w + 2, mod_d + 400, mod_h + 400]);
+        translate([-1, -300, 0]) cube([mod_w + 2, mod_d + 600, mod_h + 400]);
     }
 }
 
@@ -213,9 +214,10 @@ unit();
 if (show_pot) %pot_real();
 
 // ---- 尺寸 / 配合 自检(对标拓竹P2S ≤240, 可拆盆 148/Ø131.2/Ø93.2) ----
-echo(str("单元 W x D x H = ", mod_w, " x ", mod_d, " x ", mod_h, " mm"));
-echo(str("各轴 ≤240 ? W=", mod_w<=240, " D=", mod_d<=240, " H=", mod_h<=240));
-echo(str("箱深 box_d=", box_d, "  背板 back_t=", back_t, "  盆腔后缘留壁=", p0y-r_in*az, " mm"));
+echo(str("单元 W x H = ", mod_w, " x ", mod_h, "  | 箱深 box_d=", box_d,
+         "  盆底后伸 pot_back=", pot_back, "  真实进深 tot_d=", tot_d, " mm"));
+echo(str("各轴 ≤240 ? W=", mod_w<=240, " H=", mod_h<=240, " 真实进深=", tot_d<=240));
+echo(str("盆底外缘后伸到 Y=", back_y, " (负=伸出箱背); 排水点 Y=", drip_y,
+         " <箱深-壁 ", box_d-wall, " ? ", drip_y < box_d-wall));
 echo(str("盆径向单边间隙: 底=", (in_bot-pot_bot_d)/2, " 口=", (in_top-pot_top_d)/2, " mm"));
-echo(str("主腔轴向=盆高 ", pot_height, " mm + 口外伸 ", mouth_ext, " mm  (同锥度, 均匀间隙)"));
-echo(str("盆腔最低点 (Y=", drip_y, ", z=", drip_z, ")  储水区高=", res_h, " 水位=", water_h));
+echo(str("盆腔最低点 z=", drip_z, "  储水区高=", res_h, " 水位=", water_h));
