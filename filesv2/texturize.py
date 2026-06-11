@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+# texturize.py — 给打印件外表面叠加"牛皮纸褶皱"质感(F2-F1 Voronoi 折痕 + 值噪声)
+#
+# 算法参考: ZhouWu-211/crumpled-paper-generator
+#   - 折痕 = 多倍频 3D 元胞噪声的 (F2-F1)(到最近/次近种子点的距离差) -> 尖锐直折痕;
+#   - 卷曲 = 值噪声(value noise)做大尺度起伏。
+# 安全策略:
+#   - 只位移"朝前/朝外的可见外壳"三角面; 盆内腔/顶/底/背/侧销区/内腔保持光滑;
+#   - 仅向外凸(disp>=0) -> 不减薄壁、不缩小盆腔, 配合与强度不受影响;
+#   - 位移方向用"仅外壳面平均"的顶点法线做重心插值 -> 纹理面之间共享边水密;
+#   - 与光滑面相邻的边界做羽化(disp->0) -> 边界处位置不变, 无裂缝/T 接缝。
+#
+# 用法: python3 texturize.py [planter_v5.stl] [planter_v5_tex.stl]
+import sys, math
+import numpy as np
+
+IN  = sys.argv[1] if len(sys.argv) > 1 else "planter_v5.stl"
+OUT = sys.argv[2] if len(sys.argv) > 2 else "planter_v5_tex.stl"
+
+# ---- 可调参数 -------------------------------------------------------------
+TARGET_EDGE = 2.2     # 细分目标边长(mm) 越小越细、面越多
+AMP         = 0.95    # 褶皱总振幅(mm, 仅外凸)
+CELL        = 21.0    # Voronoi 折痕网络基准间距(mm, 大=平面大折痕疏)
+OCTAVES     = 2       # 倍频数(每层间距减半、权重减半)
+CREASE_W    = 0.30    # 折痕宽度(F2-F1 阈值, 越小折痕越细锐)
+CURL        = 0.35    # 值噪声(大尺度卷曲)占比 0..1
+TAPER       = 4.0     # 与光滑面相邻边界的羽化宽度(mm)
+SEED        = 7
+BINARY      = True    # 二进制 STL(体积约为 ASCII 的 1/5)
+
+# ---- 解析 ASCII STL -------------------------------------------------------
+def load_stl(fn):
+    vs = []
+    with open(fn) as f:
+        for line in f:
+            s = line.lstrip()
+            if s.startswith("vertex"):
+                vs.append([float(x) for x in s.split()[1:4]])
+    return np.asarray(vs, float).reshape(-1, 3, 3)
+
+tris = load_stl(IN)
+F = tris.shape[0]
+print(f"读取 {IN}: {F} 三角面")
+
+# 去重顶点 -> 索引面
+flat = tris.reshape(-1, 3)
+key = np.round(flat / 1e-4).astype(np.int64)
+_, idx, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
+inv = np.asarray(inv).reshape(-1)  # 兼容新版 numpy 的 (N,1) 形状
+V = flat[idx]                      # 唯一顶点坐标
+faces = inv.reshape(F, 3)          # 面->顶点索引
+nV = V.shape[0]
+print(f"唯一顶点 {nV}")
+
+# 面法线/重心
+fn = np.cross(V[faces[:,1]]-V[faces[:,0]], V[faces[:,2]]-V[faces[:,0]])
+fl = np.linalg.norm(fn, axis=1, keepdims=True); fl[fl==0]=1
+fn = fn / fl
+fc = V[faces].mean(axis=1)
+center = V.mean(axis=0)
+
+# ---- 选面: 朝前/朝外可见外壳 ---------------------------------------------
+# 几何参数(与 .scad 对应, 用于排除盆内腔与顶/底)
+mod_w = V[:,0].max()
+mod_h = V[:,2].max()
+outward = np.einsum('ij,ij->i', fn, fc - center) > 0      # 法线指向远离中心(外壳)
+not_back = fn[:,1] > -0.15                                # 不朝后(背板/后开口, 贴墙/堆叠基准)
+not_down = fn[:,2] > -0.55                                # 不朝下(底叠合面)
+not_top  = ~((fn[:,2] > 0.80) & (fc[:,2] > mod_h-12))     # 顶叠合面留光滑
+# 箱体两侧平面(横拼对接面)留光滑: 法线偏 ±x 且贴近侧壁平面
+on_side  = (np.abs(fn[:,0]) > 0.70) & ((fc[:,0] < 3.5) | (fc[:,0] > mod_w-3.5))
+# 朝外可见外壳: 前面板 + 整段外露斜盆外壁 + 挡土唇
+textured = outward & not_back & not_down & not_top & ~on_side
+print(f"纹理面 {textured.sum()} / {F}  (侧拼面/顶底/背/内腔保持光滑)")
+
+# ---- 仅用纹理面计算平均顶点法线(位移方向) --------------------------------
+vn = np.zeros((nV,3))
+for fi in np.where(textured)[0]:
+    for k in range(3):
+        vn[faces[fi,k]] += fn[fi]
+ln = np.linalg.norm(vn, axis=1, keepdims=True); ln[ln==0]=1
+vn = vn / ln
+
+# ---- 边界边: 纹理面与非纹理面共享的边 -> 羽化源 --------------------------
+from collections import defaultdict
+edge_faces = defaultdict(list)
+for fi in range(F):
+    a,b,c = faces[fi]
+    for e in [(a,b),(b,c),(c,a)]:
+        edge_faces[tuple(sorted(e))].append(fi)
+boundary_segs = []   # 与光滑面相邻的纹理面边(用于羽化距离)
+for e, fis in edge_faces.items():
+    tflags = [textured[i] for i in fis]
+    if any(tflags) and not all(tflags):
+        boundary_segs.append(V[list(e)])
+boundary_segs = np.asarray(boundary_segs) if boundary_segs else np.zeros((0,2,3))
+print(f"边界边 {len(boundary_segs)}")
+
+# 沿边界边密采样点 -> KD 树, 查最近距离做羽化(快)
+from scipy.spatial import cKDTree
+_bpts = []
+for A,B in boundary_segs:
+    L = np.linalg.norm(B-A); m = max(2, int(L/1.0)+1)
+    ts = np.linspace(0,1,m)
+    _bpts.append(A[None]*(1-ts[:,None]) + B[None]*ts[:,None])
+_bpts = np.concatenate(_bpts, axis=0) if _bpts else np.zeros((1,3))+1e9
+_btree = cKDTree(_bpts)
+
+def dist_to_boundary(P):
+    if len(boundary_segs)==0:
+        return np.full(len(P), 1e9)
+    d,_ = _btree.query(P, k=1)
+    return d
+
+# ---- 噪声: 3D 元胞(F2-F1) + 值噪声 --------------------------------------
+rng = np.random.default_rng(SEED)
+def hash3(ix, iy, iz, salt=0):
+    h = (ix*73856093) ^ (iy*19349663) ^ (iz*83492791) ^ (salt*2654435761)
+    h = (h ^ (h>>13)) * 1274126177
+    return (h & 0xffffff) / 0xffffff      # 0..1
+
+def cellular_f2f1(P, cell):
+    g = P / cell
+    gi = np.floor(g).astype(np.int64)
+    f1 = np.full(len(P), 1e9); f2 = np.full(len(P), 1e9)
+    for dx in (-1,0,1):
+        for dy in (-1,0,1):
+            for dz in (-1,0,1):
+                cx,cy,cz = gi[:,0]+dx, gi[:,1]+dy, gi[:,2]+dz
+                jx = hash3(cx,cy,cz,1); jy = hash3(cx,cy,cz,2); jz = hash3(cx,cy,cz,3)
+                seed = np.stack([cx+jx, cy+jy, cz+jz], axis=1)
+                d = np.linalg.norm(g - seed, axis=1)
+                nf1 = np.minimum(f1, d)
+                f2 = np.minimum(f2, np.maximum(f1, d))
+                f2 = np.minimum(f2, np.where(d<f1, f1, 1e9))
+                f1 = nf1
+    return f2 - f1
+
+def value_noise(P, cell):
+    g = P / cell; gi = np.floor(g).astype(np.int64); fr = g - gi
+    w = fr*fr*(3-2*fr)
+    val = np.zeros(len(P))
+    for dx in (0,1):
+        for dy in (0,1):
+            for dz in (0,1):
+                h = hash3(gi[:,0]+dx, gi[:,1]+dy, gi[:,2]+dz, 9)
+                wx = w[:,0] if dx else 1-w[:,0]
+                wy = w[:,1] if dy else 1-w[:,1]
+                wz = w[:,2] if dz else 1-w[:,2]
+                val += h*wx*wy*wz
+    return val   # 0..1
+
+def height(P):
+    """牛皮纸高度场 >=0: 多倍频 (1-F2F1) 形成尖脊折痕 + 值噪声卷曲。"""
+    crease = np.zeros(len(P)); amp=1.0; tot=0.0; cell=CELL
+    for o in range(OCTAVES):
+        d = cellular_f2f1(P, cell)
+        ridge = np.clip(1 - d/CREASE_W, 0, 1)   # 折痕处(F2≈F1)->1, 平面->0
+        crease += amp*ridge; tot += amp
+        amp *= 0.55; cell *= 0.5
+    crease /= tot
+    curl = value_noise(P, CELL*1.7)
+    h = (1-CURL)*crease + CURL*curl
+    return h   # 0..1
+
+# ---- 共形细分: 逐边一致的段数 + Delaunay 三角化 + 全局顶点焊接(水密) -----
+from scipy.spatial import Delaunay as _Del
+
+# 每条边的属性: 是否与纹理面相邻(决定是否细分)、是否与光滑面相邻(决定羽化)
+edge_tex = {}; edge_smooth = {}
+for e, fis in edge_faces.items():
+    ts = [textured[i] for i in fis]
+    edge_tex[e]    = any(ts)
+    edge_smooth[e] = any(not t for t in ts)
+
+def nseg(p, q):
+    return int(min(160, max(1, round(np.linalg.norm(p-q)/TARGET_EDGE))))
+
+# 全局顶点池: 以"原始(未位移)坐标"量化为键 -> 同一原始点焊到同一索引
+vpool = {}; vcoord = []
+def getv(orig, disp):
+    k = (round(orig[0]/2e-3), round(orig[1]/2e-3), round(orig[2]/2e-3))
+    idx = vpool.get(k)
+    if idx is None:
+        idx = len(vcoord); vpool[k] = idx; vcoord.append(disp)
+    return idx
+
+out_faces = []
+CORNER = np.array([[1.,0,0],[0,1,0],[0,0,1]])   # 三角三个角的重心
+
+for fi in range(F):
+    vi = faces[fi]; P3 = V[vi]; N3 = vn[vi]
+    es = [tuple(sorted((vi[a], vi[b]))) for a,b in ((0,1),(1,2),(2,0))]
+    # 该面任一边需细分? 否则原样输出单三角(绝大多数光滑面走这里)
+    ns = [nseg(P3[a], P3[b]) if edge_tex[es[k]] else 1
+          for k,(a,b) in enumerate(((0,1),(1,2),(2,0)))]
+    if max(ns) == 1:
+        i0 = getv(P3[0], P3[0]); i1 = getv(P3[1], P3[1]); i2 = getv(P3[2], P3[2])
+        out_faces.append((i0,i1,i2)); continue
+
+    tex = textured[fi]
+    # 边界点(重心): 各边按 ns 等分, 端点共享
+    barys = []
+    for k,(a,b) in enumerate(((0,1),(1,2),(2,0))):
+        for s in range(ns[k]):                       # 不含终点(由下条边起点接上)
+            t = s/ns[k]
+            barys.append(CORNER[a]*(1-t) + CORNER[b]*t)
+    # 内部点: 仅纹理面加密(光滑面只需边界点做共形扇形三角化)
+    if tex:
+        m = max(ns)
+        for i in range(1, m):
+            for j in range(1, m-i):
+                barys.append(np.array([i/m, j/m, 1-i/m-j/m]))
+    bary = np.array(barys)
+    # 去重(端点)
+    key = np.round(bary*1e4).astype(np.int64)
+    _, uq = np.unique(key, axis=0, return_index=True)
+    bary = bary[np.sort(uq)]
+    # Delaunay on (v,w)
+    if len(bary) < 3:
+        i0=getv(P3[0],P3[0]); i1=getv(P3[1],P3[1]); i2=getv(P3[2],P3[2])
+        out_faces.append((i0,i1,i2)); continue
+    tri2d = _Del(bary[:,1:3])
+    # 3D 原始位置 / 法线 / 位移
+    P = bary @ P3
+    Nn = bary @ N3; Nn /= (np.linalg.norm(Nn,axis=1,keepdims=True)+1e-9)
+    if tex:
+        # 羽化: 对"与光滑面相邻"的边, 按到该边的物理距离 disp->0
+        A2 = 0.5*np.linalg.norm(np.cross(P3[1]-P3[0], P3[2]-P3[0]))
+        mask = np.ones(len(bary))
+        for k,(a,b) in enumerate(((0,1),(1,2),(2,0))):
+            if edge_smooth[es[k]]:
+                opp = 3-a-b                          # 对角顶点(其重心分量=到该边的归一化高度)
+                hk = 2*A2/ (np.linalg.norm(P3[a]-P3[b])+1e-9)   # 对边的高
+                d = bary[:,opp]*hk
+                mask = np.minimum(mask, np.clip(d/TAPER,0,1))
+        disp = AMP*height(P)*mask
+        Pd = P + Nn*disp[:,None]
+    else:
+        Pd = P                                       # 光滑面: 仅做共形(不位移)
+    idx = [getv(P[i], Pd[i]) for i in range(len(bary))]
+    nf = fn[fi]
+    for s in tri2d.simplices:
+        a,b,c = idx[s[0]], idx[s[1]], idx[s[2]]
+        # 用未位移坐标判定绕向, 与原面法线对齐(Delaunay 不保证绕向)
+        tn = np.cross(P[s[1]]-P[s[0]], P[s[2]]-P[s[0]])
+        if np.dot(tn, nf) < 0: b,c = c,b
+        out_faces.append((a,b,c))
+
+Vout = np.array(vcoord)
+Fout = np.array(out_faces)
+# 修正三角朝向(与原面法线一致, 用未位移法线判定)
+allt = Vout[Fout]
+print(f"输出顶点 {len(Vout)}  三角面 {len(Fout)} (原 {F})")
+
+# ---- 写 STL ---------------------------------------------------------------
+def write_stl(fn, T, binary=True):
+    nrm = np.cross(T[:,1]-T[:,0], T[:,2]-T[:,0])
+    nl = np.linalg.norm(nrm,axis=1,keepdims=True); nl[nl==0]=1; nrm/=nl
+    if binary:
+        import struct
+        with open(fn,"wb") as f:
+            f.write(b"crumpled paper texture" + b"\0"*(80-22))
+            f.write(struct.pack("<I", len(T)))
+            buf = bytearray()
+            for t,nv in zip(T,nrm):
+                buf += struct.pack("<12fH", nv[0],nv[1],nv[2],
+                    t[0,0],t[0,1],t[0,2], t[1,0],t[1,1],t[1,2], t[2,0],t[2,1],t[2,2], 0)
+            f.write(buf)
+    else:
+        with open(fn,"w") as f:
+            f.write("solid crumpled\n")
+            for t,nv in zip(T,nrm):
+                f.write(f"facet normal {nv[0]:.5e} {nv[1]:.5e} {nv[2]:.5e}\n outer loop\n")
+                for v in t:
+                    f.write(f"  vertex {v[0]:.5f} {v[1]:.5f} {v[2]:.5f}\n")
+                f.write(" endloop\nendfacet\n")
+            f.write("endsolid crumpled\n")
+write_stl(OUT, allt, BINARY)
+print(f"写出 {OUT} ({'binary' if BINARY else 'ascii'})")

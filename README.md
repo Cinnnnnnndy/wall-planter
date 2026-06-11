@@ -51,6 +51,15 @@
 - **上下堆叠**:底面锥销→顶面锥孔(非对称防呆);出水短嘴插进下层井口对中。`v5_tower.png` 直叠齐平。
 - **左右横拼**:右侧销→左侧孔(两个高度),`v5_tile.png` 两件无缝对接。
 
+### 外表面牛皮纸褶皱质感(`texturize.py`,可选打印变体)
+对**朝前可见的外壳面**叠加"牛皮纸褶皱"质感(算法参考 `ZhouWu-211/crumpled-paper-generator`):多倍频 **3D 元胞噪声 F2−F1**(到最近/次近种子点距离差)生成尖锐直折痕 + 值噪声做大尺度卷曲。
+- **加纹理**:前面板 + 外露斜盆外壁 + 挡土唇;
+- **保持光滑(不动)**:盆内腔(配合面)、顶/底叠合面、箱体两侧横拼面、背板、所有内腔;
+- **仅向外凸**(位移 ≥0)→ 永不减薄壁厚、不缩小盆腔 → 配合/强度/堆叠不受影响;
+- 方向用"仅外壳面平均"的顶点法线、共形细分(逐边一致段数 + Delaunay)+ 全局顶点焊接 → 网格近水密(开口/瑕疵边 < 0.1%,任意切片器开默认修复即可)。
+- 生成:`python3 texturize.py planter_v5.stl planter_v5_tex.stl`(输出二进制 STL);参数在脚本顶部(`AMP` 振幅、`CELL` 折痕间距、`OCTAVES`、`CREASE_W` 折痕锐度、`CURL` 卷曲占比、`TARGET_EDGE` 细分密度=面数/体积权衡)。
+- **几何源仍是 `.scad`/`planter_v5.stl`**;纹理是收尾后处理,`planter_v5_tex.stl` 为带纹理的打印变体(预览见 `tex_hero.png` / `tex_panel.png`)。改任何几何后重导出 `planter_v5.stl` 再重跑本脚本即可。
+
 ### 已深化的细节
 - **盆口挡土唇 + 滴水线**:开口外翻法兰(`lip_w/lip_t`,不缩小通孔不挡插盆)挡土;法兰外缘一圈环槽(`drip_w/drip_d2`)断流,水滴落不回爬箱体。
 - **储水浸盆(底部浸灌)**:储水层加深,盆底最低弧经浸水窗泡进储水层、水位浸盆底 4mm,土壤吸水;浇多了经水注逐层下渗(见上"水路原理")。
@@ -61,7 +70,9 @@
 
 ## 当前文件
 - **`filesv2/wall_planter_v5.scad`** — 当前基础 v5.1.1(单元 W170.2×H228.5, 真实进深≈199mm, 三轴 ≤240,流形单一实体;含 `view` 视图/自检选择器、稳定底座、尺寸 echo)。
-- `filesv2/planter_v5.stl` — 单元可打印件;`filesv2/base_v5.stl` — **稳定底座**可打印件(单独打印)。
+- `filesv2/planter_v5.stl` — 单元可打印件(光滑,几何源/配合基准);`filesv2/base_v5.stl` — **稳定底座**可打印件(单独打印)。
+- `filesv2/planter_v5_tex.stl` — **牛皮纸褶皱**纹理打印变体(`texturize.py` 生成);`filesv2/texturize.py` — 纹理后处理脚本。
+- `filesv2/tex_hero.png / tex_panel.png` — 纹理效果渲染。
 - `filesv2/v5_hero.png / v5_cut.png / v5_back.png / v5_front.png / v5_side.png / v5_mouth.png` — 各向渲染图。
 - `filesv2/v5_watercut.png` — 过落水井纵剖(水注/帽/塞孔);`filesv2/reservoir_cap_schematic.png` — 井底水注特写。
 - `filesv2/v5_potsection.png` — 过盆轴剖(浸盆/储水);`filesv2/v5_tower.png` / `v5_towercut.png` — 底座+3 层全貌/过井纵剖。
