@@ -20,14 +20,15 @@ OUT = sys.argv[2] if len(sys.argv) > 2 else "planter_v5_tex.stl"
 # ---- 可调参数 -------------------------------------------------------------
 TARGET_EDGE = 2.0     # 细分目标边长(mm) 越小越细、面越多
 AMP         = 1.8     # 褶皱总振幅(mm, 仅外凸)
-CELL        = 24.0    # Voronoi 折痕网络基准间距(mm, 大=平面大折痕疏)
+CELL        = 17.0    # Voronoi 折痕网络基准间距(mm, 大=平面大折痕疏)
 OCTAVES     = 3       # 倍频数(每层间距减半、权重减半)
 CREASE_W    = 0.30    # 折痕宽度(F2-F1 阈值, 越小折痕越细锐)
 RIDGE_P     = 0.7     # 折痕锐化指数(<1 更锐)
-CURL        = 0.30    # 值噪声(大尺度卷曲)占比 0..1
+CURL        = 0.24    # 值噪声(大尺度卷曲)占比 0..1
+TOOTH       = 0.18    # 细颗粒底纹占比(纸的肌理, 防死平面/没覆盖感)
 TAPER       = 4.0     # 与光滑面相邻边界的羽化宽度(mm)
-SEAM_BOOST  = 0.9     # 盆×箱相贯线处的振幅增强倍率(+90%)
-SEAM_SIGMA  = 12.0    # 增强带宽度(mm, 高斯)
+SEAM_BOOST  = 0.5     # 盆×箱相贯线处的振幅增强倍率(+50%, 柔和熔接)
+SEAM_SIGMA  = 16.0    # 增强带宽度(mm, 高斯)
 SEED        = 7
 BINARY      = True    # 二进制 STL(体积约为 ASCII 的 1/5)
 
@@ -46,6 +47,7 @@ _P0Y=(_OUTB/2)*_AZ-_FLOOR*_AY-_PBACK
 _P0Z=_ZDIP-_FLOOR*_AZ+(_INB/2)*_AY
 _OD0=(_INB-_RATE*_FLOOR)+2*_WALL
 _SEATTOP=_FLOOR+_PH
+_CUPLEN=_FLOOR+_PH+_MEXT
 _BOXD=66.0
 _AX0=np.array([_CX,_P0Y,_P0Z]); _AXD=np.array([0.0,_AY,_AZ])
 
@@ -100,19 +102,29 @@ center = V.mean(axis=0)
 # 几何参数(与 .scad 对应, 用于排除盆内腔与顶/底)
 mod_w = V[:,0].max()
 mod_h = V[:,2].max()
-outward = np.einsum('ij,ij->i', fn, fc - center) > 0      # 法线指向远离中心(外壳)
-not_back = fn[:,1] > -0.15                                # 不朝后(背板/后开口, 贴墙/堆叠基准)
-not_down = fn[:,2] > -0.55                                # 不朝下(底叠合面)
-not_top  = ~((fn[:,2] > 0.80) & (fc[:,2] > mod_h-12))     # 顶叠合面留光滑
-# 箱体两侧平面(横拼对接面)留光滑: 法线偏 ±x 且贴近侧壁平面
-on_side  = (np.abs(fn[:,0]) > 0.70) & ((fc[:,0] < 3.5) | (fc[:,0] > mod_w-3.5))
-# 滴水槽保护: 挡土唇环槽邻域不加纹理(振幅大会填掉断流槽)
+# ---- 按盆轴解析分类(不靠朝向碰运气): 整段外露锥壁一圈全收 ----------------
 _s_fc, _r_fc = axis_sr(fc)
-groove = (_s_fc > _SEATTOP + _LIPT - _DRIPW - 2.6) & (_s_fc < _SEATTOP + _LIPT + 0.6) \
-         & (_r_fc > _OUTT/2 + _LIPW - _DRIPD - 2.0)
-# 朝外可见外壳: 前面板 + 整段外露斜盆外壁 + 挡土唇
-textured = outward & not_back & not_down & not_top & ~on_side & ~groove
-print(f"纹理面 {textured.sum()} / {F}  (侧拼面/顶底/背/内腔/滴水槽保持光滑)")
+_rel = fc - _AX0[None,:]
+_radv = _rel - _s_fc[:,None]*_AXD[None,:]
+_rlen = np.linalg.norm(_radv, axis=1, keepdims=True); _rlen[_rlen==0]=1
+rad_out = np.einsum('ij,ij->i', fn, _radv/_rlen)          # 法线的"离轴"分量
+
+# 1) 外露锥壁(含下侧/四周一整圈): 径向距离≈锥外径, 法线朝离轴, 在箱前(排除背后stub)
+cone_shell = (np.abs(_r_fc - cone_R(_s_fc)) < 1.8) & (rad_out > 0.15) \
+             & (fc[:,1] > 55.0) & (_s_fc > 0) & (_s_fc < _CUPLEN + 1.0)
+# 2) 挡土唇法兰(外柱面+前后环面), 排除盆口内孔(r 小/法线朝轴)
+lip_band = (_s_fc > _SEATTOP - 1.2) & (_s_fc < _SEATTOP + _LIPT + 1.2) \
+           & (_r_fc > _OUTT/2 - 1.0) & (rad_out > -0.9)
+# 3) 箱体前面板
+panel = (fn[:,1] > 0.60) & (np.abs(fc[:,1] - _BOXD) < 1.5)
+# 滴水槽保护: 只罩环槽本体±0.7mm(法兰其余部分照常纹理化)
+groove = (_s_fc > _SEATTOP + _LIPT - _DRIPW - 1.3) & (_s_fc < _SEATTOP + _LIPT - 0.1) \
+         & (_r_fc > _OUTT/2 + _LIPW - _DRIPD - 1.2)
+# 顶叠合面保险(理论上不会被选到, 防参数漂移)
+not_top  = ~((fn[:,2] > 0.80) & (fc[:,2] > mod_h-12))
+textured = (cone_shell | lip_band | panel) & ~groove & not_top
+print(f"纹理面 {textured.sum()} / {F}  (锥壁{cone_shell.sum()} 唇{lip_band.sum()} 面板{panel.sum()};"
+      f" 内腔/顶底/背/侧拼面/滴水槽光滑)")
 
 # ---- 仅用纹理面计算平均顶点法线(位移方向) --------------------------------
 vn = np.zeros((nV,3))
@@ -200,9 +212,10 @@ def height(P):
         crease += amp*ridge; tot += amp
         amp *= 0.55; cell *= 0.5
     crease /= tot
-    curl = value_noise(P, CELL*1.7)
-    h = (1-CURL)*crease + CURL*curl
-    return h * seam_gain(P)   # 接缝带增强(盆×箱相贯线处折痕最强, 熔掉接缝)
+    curl  = value_noise(P, CELL*1.7)
+    tooth = value_noise(P, 5.0)               # 细颗粒底纹(纸的肌理, 防死平面)
+    h = (1-CURL-TOOTH)*crease + CURL*curl + TOOTH*tooth
+    return h * seam_gain(P)   # 接缝带柔和增强(折痕翻过盆×箱相贯线, 自然过渡)
 
 # ---- 共形细分: 逐边一致的段数 + Delaunay 三角化 + 全局顶点焊接(水密) -----
 from scipy.spatial import Delaunay as _Del
@@ -240,48 +253,81 @@ for fi in range(F):
         out_faces.append((i0,i1,i2)); continue
 
     tex = textured[fi]
-    # 边界点(重心): 各边按 ns 等分, 端点共享
-    barys = []
+    # 面内正交标架(u,v): 采样/三角化都在物理平面坐标做, 与三角形长宽比无关
+    e1 = P3[1]-P3[0]; e1 = e1/ (np.linalg.norm(e1)+1e-12)
+    e2 = np.cross(fn[fi], e1); e2 = e2/ (np.linalg.norm(e2)+1e-12)
+    def to_uv(Q): return np.stack([ (Q-P3[0]) @ e1, (Q-P3[0]) @ e2 ], axis=-1)
+    uv3 = to_uv(P3)                                    # 三角形顶点的 uv
+    # 边界点: 各边按 ns 等分(端点共享 -> 跨面共形)
+    pts = []
     for k,(a,b) in enumerate(((0,1),(1,2),(2,0))):
-        for s in range(ns[k]):                       # 不含终点(由下条边起点接上)
-            t = s/ns[k]
-            barys.append(CORNER[a]*(1-t) + CORNER[b]*t)
-    # 内部点: 仅纹理面加密(光滑面只需边界点做共形扇形三角化)
+        for t in range(ns[k]):
+            pts.append(P3[a]*(1-t/ns[k]) + P3[b]*(t/ns[k]))
+    pts = np.array(pts)
+    # 内部点: 纹理面在面内铺等距六角格(各向同性, 防细长三角形的放射条纹)
     if tex:
-        m = max(ns)
-        for i in range(1, m):
-            for j in range(1, m-i):
-                barys.append(np.array([i/m, j/m, 1-i/m-j/m]))
-    bary = np.array(barys)
-    # 去重(端点)
-    key = np.round(bary*1e4).astype(np.int64)
+        T2 = np.array([uv3[1]-uv3[0], uv3[2]-uv3[0]]).T
+        Tinv = np.linalg.inv(T2) if abs(np.linalg.det(T2))>1e-9 else None
+        if Tinv is not None:
+            uvb = to_uv(pts)
+            umin,vmin = uv3.min(0)-1; umax,vmax = uv3.max(0)+1
+            h_step = TARGET_EDGE*0.866
+            rows = np.arange(vmin, vmax, h_step)
+            lat = []
+            for ri,vv in enumerate(rows):
+                us = np.arange(umin + (TARGET_EDGE/2 if ri%2 else 0), umax, TARGET_EDGE)
+                lat.append(np.stack([us, np.full(len(us), vv)], axis=1))
+            lat = np.concatenate(lat, axis=0)
+            bc = (lat - uv3[0]) @ Tinv.T               # -> (β,γ), α=1-β-γ
+            al = 1-bc[:,0]-bc[:,1]
+            ok = (bc[:,0]>1e-6)&(bc[:,1]>1e-6)&(al>1e-6)   # 在三角形内
+            # 距三条边的物理距离 ≥0.45*步长(防贴边退化三角形)
+            dmin = 0.45*TARGET_EDGE
+            for a,b in ((0,1),(1,2),(2,0)):
+                ev = uv3[b]-uv3[a]; el = np.linalg.norm(ev)+1e-12
+                d = np.abs((lat[:,0]-uv3[a,0])*ev[1]-(lat[:,1]-uv3[a,1])*ev[0])/el
+                ok &= d > dmin
+            # 与边界采样点去重(防近重合)
+            if ok.any():
+                dd = np.linalg.norm(lat[ok][:,None,:]-uvb[None,:,:], axis=2).min(1)
+                sub = np.where(ok)[0]; ok[sub[dd < 0.6*TARGET_EDGE]] = False
+            if ok.any():
+                inner = P3[0] + np.outer(lat[ok,0]-uv3[0,0], e1) + np.outer(lat[ok,1]-uv3[0,1], e2)
+                pts = np.concatenate([pts, inner], axis=0)
+    # uv 去重 + Delaunay
+    uvp = to_uv(pts)
+    key = np.round(uvp/2e-3).astype(np.int64)
     _, uq = np.unique(key, axis=0, return_index=True)
-    bary = bary[np.sort(uq)]
-    # Delaunay on (v,w)
-    if len(bary) < 3:
+    pts = pts[np.sort(uq)]; uvp = to_uv(pts)
+    if len(pts) < 3:
         i0=getv(P3[0],P3[0]); i1=getv(P3[1],P3[1]); i2=getv(P3[2],P3[2])
         out_faces.append((i0,i1,i2)); continue
-    tri2d = _Del(bary[:,1:3])
-    # 3D 原始位置 / 法线 / 位移
-    P = bary @ P3
-    Nn = bary @ N3; Nn /= (np.linalg.norm(Nn,axis=1,keepdims=True)+1e-9)
+    tri2d = _Del(uvp)
+    P = pts
+    # 法线: 重心插值(由 uv 反解重心坐标)
+    T2 = np.array([uv3[1]-uv3[0], uv3[2]-uv3[0]]).T
+    bcP = (uvp - uv3[0]) @ np.linalg.inv(T2).T
+    baryP = np.stack([1-bcP[:,0]-bcP[:,1], bcP[:,0], bcP[:,1]], axis=1)
+    Nn = baryP @ N3; Nn /= (np.linalg.norm(Nn,axis=1,keepdims=True)+1e-9)
     if tex:
         # 羽化: 对"与光滑面相邻"的边, 按到该边的物理距离 disp->0
-        A2 = 0.5*np.linalg.norm(np.cross(P3[1]-P3[0], P3[2]-P3[0]))
-        mask = np.ones(len(bary))
+        mask = np.ones(len(P))
         for k,(a,b) in enumerate(((0,1),(1,2),(2,0))):
             if edge_smooth[es[k]]:
-                opp = 3-a-b                          # 对角顶点(其重心分量=到该边的归一化高度)
-                hk = 2*A2/ (np.linalg.norm(P3[a]-P3[b])+1e-9)   # 对边的高
-                d = bary[:,opp]*hk
+                A,B = P3[a], P3[b]; AB = B-A; L = np.linalg.norm(AB)+1e-12
+                d = np.linalg.norm(np.cross(P-A, AB/L), axis=1)
                 mask = np.minimum(mask, np.clip(d/TAPER,0,1))
         disp = AMP*height(P)*mask
         Pd = P + Nn*disp[:,None]
     else:
         Pd = P                                       # 光滑面: 仅做共形(不位移)
-    idx = [getv(P[i], Pd[i]) for i in range(len(bary))]
+    idx = [getv(P[i], Pd[i]) for i in range(len(P))]
     nf = fn[fi]
     for s in tri2d.simplices:
+        # 剔除退化三角形(uv 面积≈0, 多出现在共线边界点上)
+        a2 = abs((uvp[s[1],0]-uvp[s[0],0])*(uvp[s[2],1]-uvp[s[0],1])
+               - (uvp[s[1],1]-uvp[s[0],1])*(uvp[s[2],0]-uvp[s[0],0]))
+        if a2 < 1e-4: continue
         a,b,c = idx[s[0]], idx[s[1]], idx[s[2]]
         # 用未位移坐标判定绕向, 与原面法线对齐(Delaunay 不保证绕向)
         tn = np.cross(P[s[1]]-P[s[0]], P[s[2]]-P[s[0]])
