@@ -66,9 +66,18 @@ peg_taper = 2.4;     // 销顶缩径(锥销, 自对中易插)
 tile_peg_d= 7;       // 左右横拼销径
 tile_h    = 6;       // 横拼销长
 
+/* [稳定底座 base — 单独打印, 套在最底层单元底销上, 前后展开加大支承面] */
+//  分析: 满载质心 CG_Y≈63mm 逼近前底缘 66mm(裕度仅~3mm), 堆高极易前倒。
+//  底座把支承多边形前后扩展 -> 抬高临界倾角。也兜住盆底后伸 stub。
+base_reach_f = 130;  // 底座前伸(超出箱前面, 主要抗前倒)
+base_reach_b = 95;   // 底座后伸(超出箱背, 兜盆底后伸+抗后仰)
+base_h       = 16;   // 承台高(> 底销7 + 出水短嘴6 的下伸量)
+base_wall    = 4;    // 底座壁/肋厚
+base_deck    = 3;    // 顶承台板厚
+
 dev      = true;
 show_pot = false;    // true: 叠加半透明真花盆(预览用; 干涉自检请用 view="potcheck")
-view     = "unit";   // [unit, cutx, watercut, stack, stackcut, potcheck, shaftcheck]
+view     = "unit";   // [unit, cutx, watercut, slabx, stack, stackcut, potcheck, shaftcheck, base, tower]
 $fn = dev ? 40 : 96;
 
 // ---- 派生 ----------------------------------------------------------
@@ -253,6 +262,45 @@ module unit() {
     }
 }
 
+// ---- 稳定底座(单独打印件): 前后展开承台, 顶面接最底层底销 ----------------
+//  顶承台板 + 前后斜展低板(加大支承多边形) + 底面掏空留外圈+十字肋(省料);
+//  顶面: 2 个底销孔(收最底层锥销) + 中部落水/塞清空腔(给出水短嘴+橡胶塞让位)。
+module base() {
+    by0 = -base_reach_b;                       // 底座最后缘 Y
+    byL = box_d + base_reach_f - by0;           // 底座总进深
+    difference() {
+        union() {
+            // 承台板(覆盖单元底面接触区, 厚 base_deck), 抬到 base_h 顶
+            translate([0, 0, base_h - base_deck]) cube([mod_w, box_d, base_deck]);
+            // 前后展开斜板: 从承台高 base_h 渐降到前后薄端(楔形, 省料又稳)
+            hull() {                                                   // 前展
+                translate([0, box_d - 0.1, 0]) cube([mod_w, 0.1, base_h]);
+                translate([0, box_d + base_reach_f - 2, 0]) cube([mod_w, 2, 3]);
+            }
+            hull() {                                                   // 后展
+                translate([0, 0, 0]) cube([mod_w, 0.1, base_h]);
+                translate([0, by0, 0]) cube([mod_w, 2, 3]);
+            }
+            // 外圈矮边墙(围合, 增刚)
+            difference() {
+                translate([0, by0, 0]) cube([mod_w, byL, base_h]);
+                translate([base_wall, by0 + base_wall, -1])
+                    cube([mod_w - 2*base_wall, byL - 2*base_wall, base_h + 2]);
+            }
+            // 十字肋(底面掏空区里留两道肋, 抗弯)
+            translate([cx - base_wall/2, by0, 0]) cube([base_wall, byL, base_h - base_deck]);
+            translate([0, box_d/2 - base_wall/2, 0]) cube([mod_w, base_wall, base_h - base_deck]);
+        }
+        // 顶面: 底销孔(收最底层锥销, 略放大易插)
+        for (sx = peg_xs)
+            translate([sx, peg_y, base_h - base_deck - 0.01])
+                cylinder(h = base_deck + 0.1, d = peg_d + peg_clear + 0.4);
+        // 中部清空腔: 给最底层出水短嘴(boss)+底面塞孔的橡胶塞让位, 不顶住
+        translate([shaft_x, shaft_y, base_h - 9])
+            cylinder(h = 9.1, d = boss_d + 4);
+    }
+}
+
 // ---- 视图/自检选择 ---------------------------------------------------
 module keep_x(x0, keep_right = true) {                 // 沿 x=x0 剖切
     intersection() {
@@ -261,13 +309,29 @@ module keep_x(x0, keep_right = true) {                 // 沿 x=x0 剖切
             cube([500, mod_d + 600, mod_h + 400]);
     }
 }
+module slab_x(x0, t = 2) {                              // 过 x0 的薄片剖面(读图用)
+    intersection() {
+        children();
+        translate([x0 - t/2, -300, -50]) cube([t, mod_d + 600, mod_h + 400]);
+    }
+}
 module stack2() { unit(); translate([0, 0, mod_h]) unit(); }
+module tile2()  { unit(); translate([mod_w, 0, 0]) unit(); }       // 左右横拼一对
+module tower(n = 3) {                                    // 底座 + n 层(稳定性/水路总览)
+    translate([0, 0, base_h]) for (i = [0:n-1]) translate([0, 0, i*mod_h]) unit();
+    base();
+}
 
 if (view == "unit")          { unit(); if (show_pot) %pot_real(); }
 else if (view == "cutx")     keep_x(cx, false) unit();            // 过盆轴纵剖
 else if (view == "watercut") keep_x(shaft_x) unit();              // 过落水井纵剖
+else if (view == "slabx")    slab_x(cx) unit();                   // 过盆轴薄片剖面(读水流)
 else if (view == "stack")    { stack2(); if (show_pot) %union() { pot_real(); translate([0,0,mod_h]) pot_real(); } }
 else if (view == "stackcut") keep_x(shaft_x) stack2();            // 堆叠×过井纵剖
+else if (view == "tile2")    tile2();                             // 左右横拼一对(销/孔对位)
+else if (view == "base")     base();
+else if (view == "tower")    tower(3);                            // 底座+3层 全貌(看支承面)
+else if (view == "towercut") keep_x(shaft_x) tower(3);           // 底座+3层 过井纵剖(水路)
 else if (view == "potcheck")  intersection() { unit(); pot_real(); }       // 应为空!
 else if (view == "shaftcheck") intersection() {                              // 应为空!
     cavity_inflated(1.2);
