@@ -117,9 +117,11 @@ lip_band = (_s_fc > _SEATTOP - 1.2) & (_s_fc < _SEATTOP + _LIPT + 1.2) \
            & (_r_fc > _OUTT/2 - 1.0) & (rad_out > -0.9)
 # 3) 箱体前面板
 panel = (fn[:,1] > 0.60) & (np.abs(fc[:,1] - _BOXD) < 1.5)
-# 滴水槽保护: 只罩环槽本体±0.7mm(法兰其余部分照常纹理化)
+# 滴水槽保护: 只罩环槽本体±0.7mm(法兰其余部分照常纹理化)。
+# 注意必须给 r 加上限: s∈窗口是垂直盆轴的"平板带", 不限 r 会斜穿整个模型,
+# 把盆口上方的面板也错误罩进去(实测 bug: 上面板出现成片光滑楔形)。
 groove = (_s_fc > _SEATTOP + _LIPT - _DRIPW - 1.3) & (_s_fc < _SEATTOP + _LIPT - 0.1) \
-         & (_r_fc > _OUTT/2 + _LIPW - _DRIPD - 1.2)
+         & (_r_fc > _OUTT/2 + _LIPW - _DRIPD - 1.2) & (_r_fc < _OUTT/2 + _LIPW + 3.5)
 # 顶叠合面保险(理论上不会被选到, 防参数漂移)
 not_top  = ~((fn[:,2] > 0.80) & (fc[:,2] > mod_h-12))
 textured = (cone_shell | lip_band | panel) & ~groove & not_top
