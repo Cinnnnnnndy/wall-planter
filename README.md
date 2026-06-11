@@ -71,6 +71,7 @@
 - `filesv2/build_viewer.py` — 把最新 STL 重新内嵌进 `viewer.html` 的脚本(默认 `planter_v5.stl`)。
 - `filesv2/wall_planter_v4.scad` / `planter_v4.stl` — 上一版(薄背板+浅托盘),供参考。
 - `filesv2/PROMPT.md` — 几何形态描述 + 已完成/待办清单。
+- **`filesv2/PRINT.md`** — 打印指南(打印件清单、朝向/支撑、切片参数、配合校验、装配测试清单)。
 
 ## 在 HTML 里预览模型
 直接双击 `filesv2/viewer.html`(或拖进浏览器)即可旋转/缩放查看 `planter_v5.stl`:
