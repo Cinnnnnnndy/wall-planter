@@ -69,8 +69,8 @@ tile_h    = 6;       // 横拼销长
 /* [稳定底座 base — 单独打印, 套在最底层单元底销上, 前后展开加大支承面] */
 //  分析: 满载质心 CG_Y≈63mm 逼近前底缘 66mm(裕度仅~3mm), 堆高极易前倒。
 //  底座把支承多边形前后扩展 -> 抬高临界倾角。也兜住盆底后伸 stub。
-base_reach_f = 130;  // 底座前伸(超出箱前面, 主要抗前倒)
-base_reach_b = 95;   // 底座后伸(超出箱背, 兜盆底后伸+抗后仰)
+base_reach_f = 112;  // 底座前伸(超出箱前面, 主要抗前倒); 受限于 box_d+前+后 ≤240
+base_reach_b = 58;   // 底座后伸(超出箱背, 兜盆底后伸 stub -28); 总进深=66+112+58=236 ≤240
 base_h       = 16;   // 承台高(> 底销7 + 出水短嘴6 的下伸量)
 base_wall    = 4;    // 底座壁/肋厚
 base_deck    = 3;    // 顶承台板厚
@@ -345,6 +345,9 @@ echo(str("各轴 ≤240 ? W=", mod_w<=240, " H=", mod_h<=240, " 真实进深=", 
 echo(str("盆底外缘后伸到 Y=", back_y, " (负=伸出箱背); 浸水点 Y=", drip_y,
          " <箱深-壁 ", box_d-wall, " ? ", drip_y < box_d-wall));
 echo(str("盆径向单边间隙: 底=", (in_bot-pot_bot_d)/2, " 口=", (in_top-pot_top_d)/2, " mm"));
+echo(str("稳定底座 W x 进深 = ", mod_w, " x ", box_d+base_reach_f+base_reach_b,
+         " mm  各轴≤240 ? ", mod_w<=240 && (box_d+base_reach_f+base_reach_b)<=240,
+         "  前支点 Y=", box_d+base_reach_f, " 满载CG_Y≈62.6 裕度≈", box_d+base_reach_f-62.6, "mm"));
 echo(str("储水层: 净高=", res_h, " 顶板 z=", wall+res_h, " | 盆底最低点 z=", drip_z,
          " 浸水窗=", lens_open, " | 水位 z=", wall+water_h, " → 浸盆 ", wall+water_h-drip_z, " mm"));
 echo(str("水注: 管顶 z=", wall+water_h, " 帽顶 z=", wall+water_h+siphon_gap+cap_t,
