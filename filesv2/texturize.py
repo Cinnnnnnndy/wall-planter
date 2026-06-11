@@ -18,15 +18,52 @@ IN  = sys.argv[1] if len(sys.argv) > 1 else "planter_v5.stl"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "planter_v5_tex.stl"
 
 # ---- 可调参数 -------------------------------------------------------------
-TARGET_EDGE = 2.2     # 细分目标边长(mm) 越小越细、面越多
-AMP         = 0.95    # 褶皱总振幅(mm, 仅外凸)
-CELL        = 21.0    # Voronoi 折痕网络基准间距(mm, 大=平面大折痕疏)
-OCTAVES     = 2       # 倍频数(每层间距减半、权重减半)
+TARGET_EDGE = 2.0     # 细分目标边长(mm) 越小越细、面越多
+AMP         = 1.8     # 褶皱总振幅(mm, 仅外凸)
+CELL        = 24.0    # Voronoi 折痕网络基准间距(mm, 大=平面大折痕疏)
+OCTAVES     = 3       # 倍频数(每层间距减半、权重减半)
 CREASE_W    = 0.30    # 折痕宽度(F2-F1 阈值, 越小折痕越细锐)
-CURL        = 0.35    # 值噪声(大尺度卷曲)占比 0..1
+RIDGE_P     = 0.7     # 折痕锐化指数(<1 更锐)
+CURL        = 0.30    # 值噪声(大尺度卷曲)占比 0..1
 TAPER       = 4.0     # 与光滑面相邻边界的羽化宽度(mm)
+SEAM_BOOST  = 0.9     # 盆×箱相贯线处的振幅增强倍率(+90%)
+SEAM_SIGMA  = 12.0    # 增强带宽度(mm, 高斯)
 SEED        = 7
 BINARY      = True    # 二进制 STL(体积约为 ASCII 的 1/5)
+
+# ---- 模型几何常数(与 wall_planter_v5.scad 派生一致, 用于接缝/滴水槽定位) --
+import math as _m
+_TILT=40.0; _AY=_m.cos(_m.radians(_TILT)); _AZ=_m.sin(_m.radians(_TILT))
+_WALL=3.0; _FLOOR=6.0; _RESH=25.0; _LENS=5.0; _FIT=1.5
+_PBD=93.2; _PTD=131.2; _PH=148.0; _PBACK=28.0; _MEXT=16.0
+_LIPW=6.0; _LIPT=4.0; _DRIPW=1.6; _DRIPD=2.2
+_RATE=(_PTD-_PBD)/_PH
+_INB=_PBD+2*_FIT; _INT=_PTD+2*_FIT
+_OUTB=_INB+2*_WALL; _OUTT=_INT+2*_WALL
+_SIDEG=15.0; _MODW=_OUTT+2*_SIDEG; _CX=_MODW/2
+_ZDIP=_WALL+_RESH-_LENS
+_P0Y=(_OUTB/2)*_AZ-_FLOOR*_AY-_PBACK
+_P0Z=_ZDIP-_FLOOR*_AZ+(_INB/2)*_AY
+_OD0=(_INB-_RATE*_FLOOR)+2*_WALL
+_SEATTOP=_FLOOR+_PH
+_BOXD=66.0
+_AX0=np.array([_CX,_P0Y,_P0Z]); _AXD=np.array([0.0,_AY,_AZ])
+
+def axis_sr(P):
+    """点到盆轴: 轴向坐标 s 与径向距离 r。"""
+    rel = P - _AX0
+    s = rel @ _AXD
+    rad = rel - s[:,None]*_AXD[None,:]
+    return s, np.linalg.norm(rad, axis=1)
+
+def cone_R(s):
+    return _OD0/2 + (_RATE/2)*s
+
+def seam_gain(P):
+    """盆×箱相贯线邻域增强: d=hypot(到箱前面距离, 到锥面径向距离)。"""
+    s,r = axis_sr(P)
+    d = np.hypot(P[:,1]-_BOXD, r - cone_R(s))
+    return 1.0 + SEAM_BOOST*np.exp(-(d/SEAM_SIGMA)**2)
 
 # ---- 解析 ASCII STL -------------------------------------------------------
 def load_stl(fn):
@@ -69,9 +106,13 @@ not_down = fn[:,2] > -0.55                                # 不朝下(底叠合�
 not_top  = ~((fn[:,2] > 0.80) & (fc[:,2] > mod_h-12))     # 顶叠合面留光滑
 # 箱体两侧平面(横拼对接面)留光滑: 法线偏 ±x 且贴近侧壁平面
 on_side  = (np.abs(fn[:,0]) > 0.70) & ((fc[:,0] < 3.5) | (fc[:,0] > mod_w-3.5))
+# 滴水槽保护: 挡土唇环槽邻域不加纹理(振幅大会填掉断流槽)
+_s_fc, _r_fc = axis_sr(fc)
+groove = (_s_fc > _SEATTOP + _LIPT - _DRIPW - 2.6) & (_s_fc < _SEATTOP + _LIPT + 0.6) \
+         & (_r_fc > _OUTT/2 + _LIPW - _DRIPD - 2.0)
 # 朝外可见外壳: 前面板 + 整段外露斜盆外壁 + 挡土唇
-textured = outward & not_back & not_down & not_top & ~on_side
-print(f"纹理面 {textured.sum()} / {F}  (侧拼面/顶底/背/内腔保持光滑)")
+textured = outward & not_back & not_down & not_top & ~on_side & ~groove
+print(f"纹理面 {textured.sum()} / {F}  (侧拼面/顶底/背/内腔/滴水槽保持光滑)")
 
 # ---- 仅用纹理面计算平均顶点法线(位移方向) --------------------------------
 vn = np.zeros((nV,3))
@@ -155,13 +196,13 @@ def height(P):
     crease = np.zeros(len(P)); amp=1.0; tot=0.0; cell=CELL
     for o in range(OCTAVES):
         d = cellular_f2f1(P, cell)
-        ridge = np.clip(1 - d/CREASE_W, 0, 1)   # 折痕处(F2≈F1)->1, 平面->0
+        ridge = np.clip(1 - d/CREASE_W, 0, 1)**RIDGE_P  # 折痕处(F2≈F1)->1, 锐化
         crease += amp*ridge; tot += amp
         amp *= 0.55; cell *= 0.5
     crease /= tot
     curl = value_noise(P, CELL*1.7)
     h = (1-CURL)*crease + CURL*curl
-    return h   # 0..1
+    return h * seam_gain(P)   # 接缝带增强(盆×箱相贯线处折痕最强, 熔掉接缝)
 
 # ---- 共形细分: 逐边一致的段数 + Delaunay 三角化 + 全局顶点焊接(水密) -----
 from scipy.spatial import Delaunay as _Del
