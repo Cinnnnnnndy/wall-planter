@@ -65,6 +65,7 @@ peg_clear = 0.3;
 peg_taper = 2.4;     // 销顶缩径(锥销, 自对中易插)
 tile_peg_d= 7;       // 左右横拼销径
 tile_h    = 6;       // 横拼销长
+tile_pegs = true;    // false: 不长右侧横拼销(整面墙最右一列用, 不凸出 6mm)
 
 /* [稳定底座 base — 单独打印, 套在最底层单元底销上, 前后展开加大支承面] */
 //  分析: 满载质心 CG_Y≈63mm 逼近前底缘 66mm(裕度仅~3mm), 堆高极易前倒。
@@ -247,10 +248,11 @@ module unit() {
                 translate([sx, peg_y, -7])
                     cylinder(h = 8, d1 = peg_d, d2 = peg_d - peg_taper);
 
-            // 10) 左右横拼: 右侧面定位销
-            for (sz = [res_h, mod_h*0.62])
-                translate([mod_w - 0.01, back_t/2 + 1, sz])
-                    rotate([0, 90, 0]) cylinder(h = tile_h, d = tile_peg_d);
+            // 10) 左右横拼: 右侧面定位销(tile_pegs=false 时省略, 供最右列)
+            if (tile_pegs)
+                for (sz = [res_h, mod_h*0.62])
+                    translate([mod_w - 0.01, back_t/2 + 1, sz])
+                        rotate([0, 90, 0]) cylinder(h = tile_h, d = tile_peg_d);
         }
 
         // 11) 溢流水路(排水孔): 标管竖孔(顶=水位)垂直穿底面 → 下层落水井;
@@ -317,6 +319,17 @@ module slab_x(x0, t = 2) {                              // 过 x0 的薄片剖�
 }
 module stack2() { unit(); translate([0, 0, mod_h]) unit(); }
 module tile2()  { unit(); translate([mod_w, 0, 0]) unit(); }       // 左右横拼一对
+
+/* [3×3 墙面阵列(52×73cm 空间核验)] */
+wall_w = 520;        // 可用宽(mm)
+wall_h = 730;        // 可用高(mm)
+module wall33(nx = 3, nz = 3) {                       // 3 列底座 + 3×3 单元
+    for (ix = [0:nx-1]) {
+        translate([ix*mod_w, 0, 0]) base();
+        for (iz = [0:nz-1])
+            translate([ix*mod_w, 0, base_h + iz*mod_h]) unit();
+    }
+}
 module tower(n = 3) {                                    // 底座 + n 层(稳定性/水路总览)
     translate([0, 0, base_h]) for (i = [0:n-1]) translate([0, 0, i*mod_h]) unit();
     base();
@@ -332,6 +345,7 @@ else if (view == "tile2")    tile2();                             // 左右横�
 else if (view == "base")     base();
 else if (view == "tower")    tower(3);                            // 底座+3层 全貌(看支承面)
 else if (view == "towercut") keep_x(shaft_x) tower(3);           // 底座+3层 过井纵剖(水路)
+else if (view == "wall33")   wall33();                            // 3×3 阵列(52×73cm 核验)
 else if (view == "potcheck")  intersection() { unit(); pot_real(); }       // 应为空!
 else if (view == "shaftcheck") intersection() {                              // 应为空!
     cavity_inflated(1.2);
@@ -354,3 +368,7 @@ echo(str("水注: 管顶 z=", wall+water_h, " 帽顶 z=", wall+water_h+siphon_ga
          " < 储水顶板+井? ", true, " | 井Ø", shaft_d, " 帽Ø", sp_od+4, " 环隙=", (shaft_d-sp_od-4)/2));
 echo(str("落水井走廊: 井孔外缘→盆轴 x距=", cx-(shaft_x+shaft_d/2),
          " mm (盆腔壁厚下限由 view=shaftcheck 校验, 渲染应为空)"));
+echo(str("3×3 阵列: 宽=", 3*mod_w, " (+右列销6) vs ", wall_w,
+         " 余量=", wall_w-3*mod_w, " | 高=", 3*mod_h+base_h, " vs ", wall_h,
+         " 余量=", wall_h-(3*mod_h+base_h),
+         " | 放得下? ", (3*mod_w<=wall_w) && (3*mod_h+base_h<=wall_h)));

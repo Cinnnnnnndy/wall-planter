@@ -80,7 +80,8 @@
 - `filesv2/v5_watercut.png` — 过落水井纵剖(水注/帽/塞孔);`filesv2/reservoir_cap_schematic.png` — 井底水注特写。
 - `filesv2/v5_potsection.png` — 过盆轴剖(浸盆/储水);`filesv2/v5_tower.png` / `v5_towercut.png` — 底座+3 层全貌/过井纵剖。
 - `filesv2/base_v5.png` — 稳定底座;`filesv2/v5_tile.png` — 左右横拼一对;`filesv2/v5_stack.png / v5_stackcut.png` — 两单元直叠/过井纵剖。
-- `view` 选项:`unit / cutx / watercut / slabx / stack / stackcut / tile2 / base / tower / towercut / potcheck / shaftcheck`。
+- `view` 选项:`unit / cutx / watercut / slabx / stack / stackcut / tile2 / base / tower / towercut / wall33 / potcheck / shaftcheck`。
+- **3×3 整墙(52×73cm)已核验**:宽 510.6 / 高 701.6mm,余量 9.4 / 28.4mm(`v5_wall33.png`,详见 `PRINT.md` §1.5;最右列用 `tile_pegs=false` 无侧销变体)。
 - **`filesv2/viewer.html`** — 浏览器内 3D 预览(模型已内嵌,**双击即可打开**,无需本地服务器)。
 - `filesv2/build_viewer.py` — 把最新 STL 重新内嵌进 `viewer.html` 的脚本(默认 `planter_v5.stl`)。
 - `filesv2/wall_planter_v4.scad` / `planter_v4.stl` — 上一版(薄背板+浅托盘),供参考。
