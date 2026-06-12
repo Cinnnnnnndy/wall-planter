@@ -317,6 +317,21 @@ module slab_x(x0, t = 2) {                              // 过 x0 的薄片剖�
         translate([x0 - t/2, -300, -50]) cube([t, mod_d + 600, mod_h + 400]);
     }
 }
+module keep_z(z0) {                                     // 沿 z=z0 横剖(保留下半)
+    intersection() {
+        children();
+        translate([-50, -300, -50]) cube([mod_w + 100, mod_d + 600, z0 + 50]);
+    }
+}
+// 储水水体(示意): 水位以下的储水层, 含浸住盆底的部分
+module water_body() {
+    difference() {
+        translate([wall, wall, wall])
+            cube([mod_w - 2*wall, box_d - 2*wall, water_h]);
+        translate([shaft_x, shaft_y, wall - 0.5]) cylinder(h = water_h + 1, d = sp_od);
+        translate([cx, p0y, p0z]) along(floor_t) frustum(in_bot+3, in_top+3, pot_height); // 让出盆底占位
+    }
+}
 module stack2() { unit(); translate([0, 0, mod_h]) unit(); }
 module tile2()  { unit(); translate([mod_w, 0, 0]) unit(); }       // 左右横拼一对
 
@@ -346,6 +361,12 @@ else if (view == "base")     base();
 else if (view == "tower")    tower(3);                            // 底座+3层 全貌(看支承面)
 else if (view == "towercut") keep_x(shaft_x) tower(3);           // 底座+3层 过井纵剖(水路)
 else if (view == "wall33")   wall33();                            // 3×3 阵列(52×73cm 核验)
+else if (view == "cutz")     keep_z(wall + water_h + 4) unit();   // 水位上方 4mm 横剖(俯视储水/水注)
+else if (view == "xray") {                                        // X 光: 箱体半透明+水体/花盆(预览模式出图)
+    %unit();
+    color([0.25, 0.55, 1.0]) water_body();
+    color([0.35, 0.75, 0.45]) pot_real();
+}
 else if (view == "potcheck")  intersection() { unit(); pot_real(); }       // 应为空!
 else if (view == "shaftcheck") intersection() {                              // 应为空!
     cavity_inflated(1.2);
