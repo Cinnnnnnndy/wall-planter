@@ -49,6 +49,7 @@ vent_d    = 6;       // 背面透气孔
 vent_n    = 3;
 
 /* [盆口挡土唇 / 滴水线] */
+lip_on   = false;    // false: 去掉盆口外翻唇/滴水槽(真盆自带边, 容器只做净口)
 lip_w    = 6;        // 挡土唇外翻半径增量(开口处外法兰, 不缩小通孔, 不挡插盆)
 lip_t    = 4;        // 唇厚(沿轴)
 drip_w   = 1.6;      // 滴水槽环宽
@@ -123,7 +124,7 @@ tot_d  = mod_d - back_y;                  // 真实进深(含后伸 stub), 供�
 
 // 箱顶高于花盆最高点 -> 盆上沿低于箱体高度(堆叠时箱顶平整不顶盆)
 apex_mouth = p0z + cup_len2*az + (od1/2)*ay;       // 盆口外伸管顶
-apex_lip   = op_z + ((out_top + 2*lip_w)/2)*ay;    // 挡土唇顶
+apex_lip   = op_z + ((out_top + 2*(lip_on ? lip_w : 0))/2)*ay;    // 挡土唇顶(无唇时退化)
 top_margin = 8;
 mod_h  = max(apex_mouth, apex_lip) + top_margin;    // 总高
 
@@ -169,8 +170,9 @@ module outer() {
         clip_box()
             translate([cx, p0y, p0z]) frustum(od0, od1, cup_len2);
         // 盆口挡土唇: 开口处外翻法兰(增大外径, 通孔不变 -> 不挡插盆, 挡土/导滴)
-        translate([cx, p0y, p0z]) along(seat_top)
-            frustum(out_top + 2*lip_w, out_top + 2*lip_w, lip_t);
+        if (lip_on)
+            translate([cx, p0y, p0z]) along(seat_top)
+                frustum(out_top + 2*lip_w, out_top + 2*lip_w, lip_t);
     }
 }
 
@@ -185,15 +187,16 @@ module unit() {
                 translate([cx, p0y, p0z]) along(floor_t)
                     frustum(in_bot, in_top, pot_height);
                 translate([cx, p0y, p0z]) along(seat_top)
-                    frustum(in_top, in_top + rate*(mouth_ext + lip_t), mouth_ext + lip_t + 0.1);
+                    frustum(in_top, in_top + rate*(mouth_ext + (lip_on?lip_t:0)),
+                            mouth_ext + (lip_on?lip_t:0) + 0.1);
 
-                // 1b) 滴水线: 挡土唇外柱面一圈环槽(切到法兰外径之外, 明确向外开口),
-                //     水沿唇外缘到此处断流滴落, 不沿底面回爬到箱体。
-                translate([cx, p0y, p0z]) along(seat_top + lip_t - drip_w - 0.6)
-                    difference() {
-                        frustum(out_top + 2*lip_w + 6, out_top + 2*lip_w + 6, drip_w);
-                        frustum(out_top + 2*lip_w - 2*drip_d2, out_top + 2*lip_w - 2*drip_d2, 3*drip_w);
-                    }
+                // 1b) 滴水线: 挡土唇外柱面一圈环槽(仅在有唇时切)
+                if (lip_on)
+                    translate([cx, p0y, p0z]) along(seat_top + lip_t - drip_w - 0.6)
+                        difference() {
+                            frustum(out_top + 2*lip_w + 6, out_top + 2*lip_w + 6, drip_w);
+                            frustum(out_top + 2*lip_w - 2*drip_d2, out_top + 2*lip_w - 2*drip_d2, 3*drip_w);
+                        }
 
                 // 2) 储水区内腔(储水层: 箱体下部封闭盒, 留四壁+底+顶盖)。
                 //    盆腔最低点 z_dip 低于储水顶板 lens_open → 布尔后盆底最低弧
