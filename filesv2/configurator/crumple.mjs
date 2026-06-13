@@ -10,7 +10,7 @@ export const CRUMPLE_DEFAULTS = {
   octaves: 6,      // 褶皱层级 (more = finer sub-creases down the fractal)
   curl: 0,         // 纸张整体弯曲 — macro curl amount (0 = none)
   rot: 1,          // rotate domain per octave (de-grid)
-  inClamp: 2.2,    // max inward displacement (mm) — protects the 3mm cup wall
+  minWall: 1.2,    // keep crumpled outer >= this from cavity/reservoir/downpipe (local inward clamp)
   el: 1.2,         // voxel edge length (mm)
   seed: 7,
   offset: [0, 0, 0], // global/array offset -> seamless tiling
@@ -85,26 +85,39 @@ export function buildCrumpled(Manifold, params = {}, cOpts = {}) {
     const inside = Math.min(Math.max(qx, qy, qz), 0);
     return -(outside + inside);                    // positive inside
   };
-  const bx = d.cx, by = d.p0y, bz = d.p0z;          // cup base point
-  const L = d.cup_len2, rB = d.od0 / 2, rT = d.od1 / 2;
-  const slope = (rT - rB) / L, cosA = 1 / Math.sqrt(1 + slope * slope);
-  const sdCup = (px, py, pz) => {
+  const bx = d.cx, by = d.p0y, bz = d.p0z;          // cup base point; axis = [0, ay, az]
+  const axRel = (px, py, pz) => {
     const rx = px - bx, ry = py - by, rz = pz - bz;
-    const s = ry * d.ay + rz * d.az;                // axial coord along pot axis
-    const ax = rx, ay = ry - s * d.ay, az = rz - s * d.az;
-    const rad = Math.hypot(ax, ay, az);
-    const R = rB + slope * s;
-    const side = (R - rad) * cosA;
-    let sd = Math.min(s, L - s, side);              // positive inside
-    return Math.min(sd, px, W - px);                // clip cup to box x-range
+    const s = ry * d.ay + rz * d.az;
+    return [s, Math.hypot(rx, ry - s * d.ay, rz - s * d.az)];   // [axial, radial]
   };
-  const bot = 8;                                    // keep bottom face flat (mating) — fade crumple below z=bot
+  // positive-inside SDF of a cone segment along the pot axis (s0->s1, r0->r1)
+  const coneSeg = (px, py, pz, s0, r0, s1, r1) => {
+    const [s, rad] = axRel(px, py, pz);
+    const R = r0 + (r1 - r0) * (s - s0) / (s1 - s0);
+    const cs = 1 / Math.sqrt(1 + ((r1 - r0) / (s1 - s0)) ** 2);
+    return Math.min(s - s0, s1 - s, (R - rad) * cs);
+  };
+  const sdCup = (px, py, pz) =>
+    Math.min(coneSeg(px, py, pz, 0, d.od0 / 2, d.cup_len2, d.od1 / 2), px, W - px);  // clip to box x
+  // internal voids (positive inside) — the crumpled outer must keep >= minWall from these
+  const sdCavity = (px, py, pz) => coneSeg(px, py, pz, p.floor_t, d.in_bot / 2, d.cup_len2, (d.in_top + d.rate * p.mouth_ext) / 2);
+  const sdRes = (px, py, pz) => {
+    const ax = Math.abs(px - W / 2) - (W / 2 - p.wall), ay = Math.abs(py - D / 2) - (D / 2 - p.wall), az = Math.abs(pz - (p.wall + p.res_h / 2)) - p.res_h / 2;
+    return -(Math.hypot(Math.max(ax, 0), Math.max(ay, 0), Math.max(az, 0)) + Math.min(Math.max(ax, ay, az), 0));
+  };
+  const sdShaft = (px, py, pz) => p.shaft_d / 2 - Math.hypot(px - p.shaft_x, py - p.shaft_y);
+  const bot = 8;                                    // small flat base (mating); fade crumple below z=bot
   const sdf = (pt) => {
     const px = pt[0], py = pt[1], pz = pt[2];
     const base = Math.max(sdBox(px, py, pz), sdCup(px, py, pz));
-    const fade = Math.min(Math.max(pz / bot, 0), 1);          // 0 at bottom -> flat base
+    const fade = Math.min(Math.max(pz / bot, 0), 1);
     let dz = o.intensity * field(px + off[0], py + off[1], pz + off[2]) * fade;
-    if (dz < -o.inClamp) dz = -o.inClamp;                     // protect cup wall / cavity
+    // clamp INWARD only as far as the nearest internal void allows (keep >= minWall of wall).
+    // thick box regions are unclamped (full crumple, no flat patches); only thin walls protected.
+    const voidNear = Math.max(sdCavity(px, py, pz), sdRes(px, py, pz), sdShaft(px, py, pz));
+    const dzMin = o.minWall + voidNear;             // very negative far from voids -> no clamp
+    if (dz < dzMin) dz = dzMin;
     return base + dz;
   };
   const m = 14;
