@@ -1,0 +1,1 @@
+{"name":"wall-planter-configurator","private":true,"type":"module","version":"0.1.0","dependencies":{"delaunator":"^5.1.0","manifold-3d":"^3.5.1"}}
