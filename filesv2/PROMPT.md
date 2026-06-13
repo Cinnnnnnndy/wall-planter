@@ -118,3 +118,18 @@
 5. 底座顶面改向上定位销 + 中部排水口(最底层排水到托盘)。
 6. 自检: potcheck/shaftcheck/tilecheck/rescheck 全空; 三轴≤240; 单一实体。
    连接筒配合 conn_fit=shaft_d-0.8; 插销 pin_clear/join_clear。
+
+## v5.3(2026-06-13, 第二轮反馈: 连接缝/檐口/背板减料)
+A. ✅ **连接筒止位环不顶缝**: 沉孔比环深 conn_recess=1.0mm(原0.6) -> 环顶低于叠合面,
+   上下单元平面贴死; 修正 stack2 预览落座位(joint 渲染证实金/橙接触面一条直线=贴平)。
+B. ✅ **檐口下降**: mouth_ext 16->6, 盆口端沿盆轴降 10mm(≈竖直7.4mm), 收口贴近真盆口;
+   mod_h 228.5->221.1(仍≤240); potcheck 仍空(真盆装得下)。想更贴: mouth_ext 再降到2。
+C. ✅ **背板网格减料**(back_lattice, 默认开): 背面 openwork 圆窗栅格皮(lat_cell/lat_wall/
+   lat_border) + 其后楔形掏空腔(lat_ydepth 深, 默认30mm; 前部留实心=配重/强度)。
+   仅储水腔以上(lat_zmin=res_h+wall+8); 盆外壳+lat_keep / 落水管+lat_keep / 储水盒 / 前壳
+   lat_frontsk / 边框 / 顶部 lat_top(堆叠孔凸台)全保留; 经背面孔通外 -> Volumes=2 无封闭腔。
+   省料: 30mm 掏空 ≈338cc(21.4%体积; 12%填充实际≈84g + 墙皮/打印时间)。lat_ydepth≥box_d 掏到前壳≈41%。
+   新自检: latticecheck(掏空腔×储水盒∪落水管)/latticepot(掏空腔×盆腔) 应空; latcut 纵剖预览。
+   注意权衡: 背面减重会使重心略前移(抗前倾稍弱), 低填充时影响很小且有稳定底座兜底;
+   内腔为贴墙隐藏式(经Ø lat_cell 背孔通风/通外), 切片若需内支撑可减小 lat_ydepth 或关 back_lattice。
+   只动背面: 左右侧壁/前壳/盆/储水/落水全不变(用户指定"只做背板")。
