@@ -186,3 +186,12 @@ C. ✅ **背板网格减料**(back_lattice, 默认开): 背面 openwork 六角�
 - 真修穿模: 新增 MOUTH_TAPER=9mm —— 盆口 s→CUPLEN 顶沿把纹理 smoothstep 羽化到 0, 得到干净净口(开口边=光滑圆, 同基础件)。
 - 保留: 面板 remesh(无放射条纹)、选面/算法/参数(seeds36/oct5/intensity0.7/curl0)不变。
 - 自检: 60656面, 非流形=0, 边界 0.145%; 盆口开口边已与光滑基础件一致(渲染 m2 验证)。
+
+## v5.4 几何加宽(wall_planter_v5.scad, 2026-06-13, 用户: 3×3 总宽+8cm, 总高不变)
+> 单元横拼 3 × 堆叠 3 + 底座。要求总宽 +80mm、总高不变。
+- 改 side_gap 15→28.3333(纯加两侧边距): 单元宽 mod_w 170.2→196.867(+80/3); mod_h=221.13 不变(与 side_gap 无关)。
+  真盆/盆腔/落水井/储水腔/连接件全不变; 单件三轴 196.87×221.13×199.28(tot_d) 均 ≤240 仍可打印。
+- 同步: texturize.py 的硬编码 _SIDEG 15→28.3333(否则纹理选面错位); 重导 planter_v5.stl/base_v5.stl/planter_v5_tex.stl。
+- 自检: potcheck/shaftcheck/tilecheck/rescheck/latticecheck/latticepot 全空(加宽后盆/井/横拼/储水/网格均不破)。
+- 3×3+底座 总尺寸(wall33 实测 bbox): 宽 590.6 × 高 679.4(=底座16+3×221.13) × 深 236(底座前后展开) mm。预览 v54_wall33.png。
+- 连接筒/插销不随宽度变(connector_v5.stl/pin_v5.stl 不变)。
