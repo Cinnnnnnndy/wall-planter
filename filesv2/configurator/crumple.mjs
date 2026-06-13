@@ -10,6 +10,8 @@ export const CRUMPLE_DEFAULTS = {
   octaves: 6,      // 褶皱层级 (more = finer sub-creases down the fractal)
   curl: 0,         // 纸张整体弯曲 — macro curl amount (0 = none)
   rot: 1,          // rotate domain per octave (de-grid)
+  kEdge: 8,        // front-face mask blend width at box edges (mm)
+  kCup: 5,         // cup vs box mask blend width (mm)
   minWall: 1.2,    // keep crumpled outer >= this from cavity/reservoir/downpipe (local inward clamp)
   el: 1.2,         // voxel edge length (mm)
   seed: 7,
@@ -107,16 +109,24 @@ export function buildCrumpled(Manifold, params = {}, cOpts = {}) {
     return -(Math.hypot(Math.max(ax, 0), Math.max(ay, 0), Math.max(az, 0)) + Math.min(Math.max(ax, ay, az), 0));
   };
   const sdShaft = (px, py, pz) => p.shaft_d / 2 - Math.hypot(px - p.shaft_x, py - p.shaft_y);
-  const bot = 8;                                    // small flat base (mating); fade crumple below z=bot
+  const smoothstep = (e0, e1, x) => { const t = Math.min(Math.max((x - e0) / (e1 - e0), 0), 1); return t * t * (3 - 2 * t); };
+  const kEdge = o.kEdge, kCup = o.kCup;
   const sdf = (pt) => {
     const px = pt[0], py = pt[1], pz = pt[2];
-    const base = Math.max(sdBox(px, py, pz), sdCup(px, py, pz));
-    const fade = Math.min(Math.max(pz / bot, 0), 1);
-    let dz = o.intensity * field(px + off[0], py + off[1], pz + off[2]) * fade;
-    // clamp INWARD only as far as the nearest internal void allows (keep >= minWall of wall).
-    // thick box regions are unclamped (full crumple, no flat patches); only thin walls protected.
+    const sb = sdBox(px, py, pz), sc = sdCup(px, py, pz);
+    const base = Math.max(sb, sc);
+    // FRONT-VISIBLE mask: texture only the box +y front face OR the exposed cup; leave the
+    // sides / back / top / bottom and the cup interior smooth (functional + faster to bake).
+    const gy1 = D - py;                                   // gap to front (+y) face
+    const others = Math.min(px, W - px, py, pz, H - pz);  // nearest of the other 5 box faces
+    const frontW = smoothstep(0, kEdge, others - gy1);    // 1 only where +y face is nearest
+    const cupW = smoothstep(-kCup, kCup, sc - sb);        // 1 where the cup is the active surface
+    const w = Math.max(cupW, frontW);
+    if (w < 0.004) return base;                           // smooth elsewhere (skip field eval)
+    let dz = o.intensity * field(px + off[0], py + off[1], pz + off[2]) * w;
+    // clamp INWARD only as far as the nearest internal void allows (keep >= minWall of wall)
     const voidNear = Math.max(sdCavity(px, py, pz), sdRes(px, py, pz), sdShaft(px, py, pz));
-    const dzMin = o.minWall + voidNear;             // very negative far from voids -> no clamp
+    const dzMin = o.minWall + voidNear;
     if (dz < dzMin) dz = dzMin;
     return base + dz;
   };
