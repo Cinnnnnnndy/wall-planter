@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>墙面种植单元 · 参数配置器 (v5.3)</title>
+<style>
+  html,body{margin:0;height:100%;background:#1a1c20;color:#e6e8eb;font:13px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;overflow:hidden}
+  #app{position:fixed;inset:0}
+  #hud{position:fixed;top:10px;left:10px;background:rgba(35,38,44,.88);border:1px solid #33373e;border-radius:10px;padding:10px 12px;max-width:300px;z-index:5}
+  #hud h1{margin:0 0 4px;font-size:14px}
+  #hud .dim{color:#6cc08b;font-variant-numeric:tabular-nums}
+  #hud .muted{color:#9aa0a8;font-size:11px;margin-top:6px}
+  #busy{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.45);color:#fff;font-size:16px;z-index:20}
+  .lil-gui{--width:300px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="hud"><h1>墙面种植单元 · 配置器</h1>
+  <div>阵列 <span class="dim" id="arr"></span> · 总尺寸 <span class="dim" id="tot"></span></div>
+  <div>单元 <span class="dim" id="unit"></span> · 三角面 <span class="dim" id="tris"></span></div>
+  <div class="muted">左键转 · 右键平移 · 滚轮缩放。纹理为「替换表面」(内外起伏, 不加料), 阵列间连续无缝。</div>
+</div>
+<div id="busy">计算中…</div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "delaunator": "https://cdn.jsdelivr.net/npm/delaunator@5.1.0/+esm",
+  "lil-gui": "https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/+esm",
+  "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"
+}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+import ManifoldModule from 'https://cdn.jsdelivr.net/npm/manifold-3d@3.5.1/manifold.js';
+import Delaunator from 'delaunator';
+import GUI from 'lil-gui';
+import JSZip from 'jszip';
+
+// ============================ inlined geometry.mjs ============================
+// geometry.mjs — parametric wall-planter geometry, ported from wall_planter_v5.scad.
+// Runs in Node (for testing) and the browser; pass an initialized manifold-3d module in.
+// Mirrors the .scad variable names so it stays auditable against the source of truth.
+
+const DEFAULTS = {
+  // pot (removable real pot) -> cavity = this + clearance
+  pot_top_d: 131.2, pot_bot_d: 93.2, pot_height: 148, fit_clear: 1.5,
+  // tilted cup / walls
+  tilt: 40, wall: 3.0, floor_t: 6, mouth_ext: 6,
+  // box + back
+  box_d: 66, pot_back: 28, back_t: 6, side_gap: 15, res_h: 25, lens_open: 5,
+  // downpipe shaft
+  shaft_d: 23, shaft_x: 17, shaft_y: 19, vent_d: 6, vent_n: 3,
+  // inter-layer connector
+  conn_bore: 15, conn_sock: 12, conn_flange_h: 3, conn_recess: 1.0,
+  // locating holes / pins
+  join_d: 7, join_clear: 0.5, pin_clear: 0.35, peg_dp: 9, tile_dp: 8, pin_len: 16,
+  // pot-rim lip (off; real pot has its own rim)
+  lip_on: false, lip_w: 6, lip_t: 4, drip_w: 1.6, drip_d2: 2.2,
+  // stabilising base
+  base_reach_f: 112, base_reach_b: 58, base_h: 16, base_wall: 4, base_deck: 3,
+  // back hex lattice lightening
+  back_lattice: true, lat_cell: 18, lat_wall: 7, lat_border: 12, lat_top: 16,
+  lat_keep: 2.5, lat_frontsk: 4, lat_rib: 3, lat_ydepth: 30,
+  // tessellation
+  fn: 64, fn_hole: 32,
+};
+
+// Derived params (pure function of the inputs) — same formulas as the .scad.
+function derive(p) {
+  const d = { ...p };
+  const rad = Math.PI / 180;
+  d.in_bot = p.pot_bot_d + 2 * p.fit_clear;
+  d.in_top = p.pot_top_d + 2 * p.fit_clear;
+  d.out_bot = d.in_bot + 2 * p.wall;
+  d.out_top = d.in_top + 2 * p.wall;
+  d.ay = Math.cos(p.tilt * rad);
+  d.az = Math.sin(p.tilt * rad);
+  d.rate = (p.pot_top_d - p.pot_bot_d) / p.pot_height;
+  d.r_in = d.in_bot / 2;
+  d.r_out = d.out_bot / 2;
+  d.z_dip = p.wall + p.res_h - p.lens_open;
+  d.p0y = d.r_out * d.az - p.floor_t * d.ay - p.pot_back;
+  d.p0z = d.z_dip - p.floor_t * d.az + d.r_in * d.ay;
+  d.back_y = d.p0y + p.floor_t * d.ay - d.r_out * d.az;
+  d.cup_len2 = p.floor_t + p.pot_height + p.mouth_ext;
+  d.seat_top = p.floor_t + p.pot_height;
+  d.od0 = (d.in_bot - d.rate * p.floor_t) + 2 * p.wall;
+  d.od1 = (d.in_top + d.rate * p.mouth_ext) + 2 * p.wall;
+  d.op_y = d.p0y + d.seat_top * d.ay;
+  d.op_z = d.p0z + d.seat_top * d.az;
+  d.mod_w = d.out_top + 2 * p.side_gap;
+  d.cx = d.mod_w / 2;
+  d.front_y = d.op_y + (d.out_top / 2) * d.az;
+  d.mod_d = d.front_y + 8;
+  d.tot_d = d.mod_d - d.back_y;
+  d.apex_mouth = d.p0z + d.cup_len2 * d.az + (d.od1 / 2) * d.ay;
+  d.apex_lip = d.op_z + ((d.out_top + 2 * (p.lip_on ? p.lip_w : 0)) / 2) * d.ay;
+  d.mod_h = Math.max(d.apex_mouth, d.apex_lip) + 8;
+  d.vent_z = d.p0z + 8;
+  d.peg_xs = [d.mod_w * 0.27, d.mod_w * 0.70];
+  d.peg_y = p.back_t / 2 + 2;
+  d.tile_zs = [d.mod_h * 0.34, d.mod_h * 0.70];
+  d.conn_flange_d = p.shaft_d + 3;
+  d.conn_fit = p.shaft_d - 0.8;
+  d.lat_zmin = p.wall + p.res_h + 8;
+  d.ydep = Math.min(p.lat_ydepth, p.box_d - p.lat_frontsk);
+  return d;
+}
+
+// Build all parts. Returns { planter, connector, pin, base, d } (manifolds + derived).
+function build(Manifold, params = {}) {
+  const p = { ...DEFAULTS, ...params };
+  const d = derive(p);
+  const { cube, cylinder } = Manifold;
+  const U = (arr) => arr.reduce((a, b) => a.add(b));
+  const tilt2 = -(90 - p.tilt);
+
+  // frustum(d1,d2,len): tilted cone, base at local origin, axis along the pot axis.
+  const frustum = (d1, d2, len, seg = p.fn) =>
+    cylinder(len, d1 / 2, d2 / 2, seg, false).rotate([tilt2, 0, 0]);
+  // place at cup origin then slide `dist` up the pot axis
+  const atAxis = (m, dist = 0) => m.translate([0, dist * d.ay, dist * d.az]).translate([d.cx, d.p0y, d.p0z]);
+  const clip = (m) => m.intersect(cube([d.mod_w + 2, d.mod_d + 600, d.mod_h + 400]).translate([-1, -300, 0]));
+  const cyl = (h, dia, seg = p.fn_hole) => cylinder(h, dia / 2, dia / 2, seg, false);
+
+  // ---- outer shell: box + protruding clipped cup -------------------------
+  let outer = cube([d.mod_w, p.box_d, d.mod_h]).add(
+    clip(atAxis(frustum(d.od0, d.od1, d.cup_len2)))
+  );
+
+  // ---- cuts --------------------------------------------------------------
+  const cuts = [];
+  // 1) pot cavity (cone + mouth opening)
+  cuts.push(atAxis(frustum(d.in_bot, d.in_top, p.pot_height), p.floor_t));
+  cuts.push(atAxis(frustum(d.in_top, d.in_top + d.rate * p.mouth_ext, p.mouth_ext + 0.1), d.seat_top));
+  // 2) reservoir box
+  cuts.push(cube([d.mod_w - 2 * p.wall, p.box_d - 2 * p.wall, p.res_h]).translate([p.wall, p.wall, p.wall]));
+  // 3) downpipe shaft + top counterbore + bottom lead-in
+  cuts.push(cyl(d.mod_h + 2, p.shaft_d).translate([p.shaft_x, p.shaft_y, -1]));
+  cuts.push(cyl(p.conn_flange_h + p.conn_recess + 0.4, d.conn_flange_d + 2 * p.join_clear)
+    .translate([p.shaft_x, p.shaft_y, d.mod_h - p.conn_flange_h - p.conn_recess]));
+  cuts.push(cylinder(3, (p.shaft_d + 3) / 2, p.shaft_d / 2, p.fn_hole, false)
+    .translate([p.shaft_x, p.shaft_y, -0.01]));
+  // 4) back vents into root zone
+  for (let k = 0; k < p.vent_n; k++)
+    cuts.push(cyl(p.box_d + 1, p.vent_d).rotate([-90, 0, 0])
+      .translate([d.cx + (k - (p.vent_n - 1) / 2) * 32, -0.5, d.vent_z]));
+  // 5) stacking locating holes (top & bottom, asymmetric)
+  for (const sx of d.peg_xs) {
+    cuts.push(cyl(p.peg_dp + 1, p.join_d + p.join_clear).translate([sx, d.peg_y, d.mod_h - p.peg_dp]));
+    cuts.push(cyl(p.peg_dp + 1, p.join_d + p.join_clear).translate([sx, d.peg_y, -1]));
+  }
+  // 6) side tiling holes (above reservoir)
+  for (const sz of d.tile_zs) {
+    cuts.push(cyl(p.tile_dp + 1, p.join_d + p.join_clear).rotate([0, 90, 0]).translate([-1, d.peg_y, sz]));
+    cuts.push(cyl(p.tile_dp + 1, p.join_d + p.join_clear).rotate([0, 90, 0]).translate([d.mod_w - p.tile_dp, d.peg_y, sz]));
+  }
+
+  let unit = Manifold.difference(outer, U(cuts));
+
+  // ---- back hex lattice: hollow + grid rib skin --------------------------
+  if (p.back_lattice) {
+    const cupProtect = atAxis(frustum(d.od0 + 2 * p.lat_keep, d.od1 + 2 * p.lat_keep, d.cup_len2));
+    const shaftProtect = cyl(d.mod_h + 4, p.shaft_d + 2 * p.lat_keep).translate([p.shaft_x, p.shaft_y, -2]);
+    const hollowGross = cube([d.mod_w - 2 * p.lat_border, d.ydep + 1, (d.mod_h - p.lat_top) - d.lat_zmin])
+      .translate([p.lat_border, -1, d.lat_zmin]);
+    const back_hollow = Manifold.difference(hollowGross, cupProtect.add(shaftProtect));
+    unit = Manifold.difference(unit, back_hollow);
+
+    // hex window array (pointy-top honeycomb)
+    const R = p.lat_cell / Math.sqrt(3);
+    const px = p.lat_cell + p.lat_wall;
+    const pz = 1.5 * R + p.lat_wall * 0.87;
+    const z1 = d.mod_h - p.lat_top, x0 = p.lat_border, x1 = d.mod_w - p.lat_border;
+    const nz = Math.floor((z1 - d.lat_zmin - 2 * R) / pz);
+    const hexes = [];
+    for (let iz = 0; iz <= Math.max(0, nz); iz++) {
+      const zz = d.lat_zmin + R + iz * pz;
+      const xoff = (iz % 2) * px / 2;
+      const nx = Math.floor((x1 - x0 - p.lat_cell - xoff) / px);
+      for (let ix = 0; ix <= Math.max(0, nx); ix++) {
+        const xx = x0 + p.lat_cell / 2 + xoff + ix * px;
+        hexes.push(cylinder(p.box_d + 2, R, R, 6, false).rotate([0, 0, 30]).rotate([-90, 0, 0]).translate([xx, -1, zz]));
+      }
+    }
+    const windows = U(hexes);
+    const ribGross = cube([d.mod_w - 2 * p.lat_border, p.lat_rib, (d.mod_h - p.lat_top) - d.lat_zmin])
+      .translate([p.lat_border, 0, d.lat_zmin]);
+    const ribSub = U([
+      windows,
+      atAxis(frustum(d.in_bot, d.in_top, p.pot_height), p.floor_t),
+      atAxis(frustum(d.in_top, d.in_top + d.rate * p.mouth_ext, p.mouth_ext + 0.1), d.seat_top),
+      cyl(d.mod_h + 2, p.shaft_d).translate([p.shaft_x, p.shaft_y, -1]),
+    ]);
+    const ribs = Manifold.difference(ribGross, ribSub);
+    unit = unit.add(ribs);
+  }
+
+  // ---- connector (separate print) ----------------------------------------
+  const cf = d.conn_fit;
+  let connector = Manifold.difference(
+    U([
+      cylinder(p.conn_sock, (cf - 1.2) / 2, cf / 2, p.fn_hole, false),
+      cylinder(p.conn_flange_h, d.conn_flange_d / 2, d.conn_flange_d / 2, p.fn_hole, false).translate([0, 0, p.conn_sock]),
+      cylinder(p.conn_sock, cf / 2, (cf - 1.2) / 2, p.fn_hole, false).translate([0, 0, p.conn_sock + p.conn_flange_h]),
+    ]),
+    cyl(2 * p.conn_sock + p.conn_flange_h + 2, p.conn_bore).translate([0, 0, -1])
+  );
+
+  // ---- pin (chamfered both ends; revolve approximated as stacked cones) ---
+  const pd = p.join_d - p.pin_clear;
+  const pin = U([
+    cylinder(1, (pd - 2) / 2, pd / 2, p.fn_hole, false),
+    cyl(p.pin_len - 2, pd).translate([0, 0, 1]),
+    cylinder(1, pd / 2, (pd - 2) / 2, p.fn_hole, false).translate([0, 0, p.pin_len - 1]),
+  ]);
+
+  // ---- base (stabilising foot) -------------------------------------------
+  const by0 = -p.base_reach_b, byL = p.box_d + p.base_reach_f - by0;
+  const pin_d = p.join_d - p.pin_clear;
+  let baseSolid = U([
+    cube([d.mod_w, p.box_d, p.base_deck]).translate([0, 0, p.base_h - p.base_deck]),
+    Manifold.hull([cube([d.mod_w, 0.1, p.base_h]).translate([0, p.box_d - 0.1, 0]),
+      cube([d.mod_w, 2, 3]).translate([0, p.box_d + p.base_reach_f - 2, 0])]),
+    Manifold.hull([cube([d.mod_w, 0.1, p.base_h]),
+      cube([d.mod_w, 2, 3]).translate([0, by0, 0])]),
+    Manifold.difference(cube([d.mod_w, byL, p.base_h]).translate([0, by0, 0]),
+      cube([d.mod_w - 2 * p.base_wall, byL - 2 * p.base_wall, p.base_h + 2]).translate([p.base_wall, by0 + p.base_wall, -1])),
+    cube([p.base_wall, byL, p.base_h - p.base_deck]).translate([d.cx - p.base_wall / 2, by0, 0]),
+    cube([d.mod_w, p.base_wall, p.base_h - p.base_deck]).translate([0, p.box_d / 2 - p.base_wall / 2, 0]),
+  ]);
+  baseSolid = Manifold.difference(baseSolid, cyl(p.base_h + 2, p.shaft_d + 1).translate([p.shaft_x, p.shaft_y, -1]));
+  const basePins = U(d.peg_xs.map((sx) =>
+    cyl(p.peg_dp - 1, pin_d).translate([sx, d.peg_y, p.base_h - p.base_deck])));
+  const base = baseSolid.add(basePins);
+
+  return { planter: unit, connector, pin, base, d, p };
+}
+
+// ============================ inlined texture.mjs ============================
+// texture.mjs — crumpled-paper surface texture, ported from texturize.py with two changes:
+//  (1) noise sampled in GLOBAL/array coordinates (vertex + tileOffset) -> continuous across
+//      tiled modules (no seam), so a 3x3 / 4x3 array reads as one textured sheet;
+//  (2) displacement is CENTERED about the nominal surface (in & out, mean~0) -> the texture
+//      *becomes* the wall instead of an added outward shell -> no extra filament.
+// Operates on a manifold mesh ({vertProperties:Float32Array, triVerts:Uint32Array}) and the
+// derived geometry params `d`; returns new {vertProperties, triVerts} (Float32/Uint32).
+
+
+const TEX_DEFAULTS = {
+  amp: 1.6, cell: 17, octaves: 3, crease_w: 0.30, ridge_p: 0.7,
+  curl: 0.24, tooth: 0.18, target_edge: 2.4, seed: 7,
+};
+
+// ---- value/cellular noise (hash matches texturize.py) ----------------------
+function hash3(ix, iy, iz, salt) {
+  let h = (Math.imul(ix, 73856093) ^ Math.imul(iy, 19349663) ^ Math.imul(iz, 83492791) ^ Math.imul(salt, 2654435761)) >>> 0;
+  h = (Math.imul((h ^ (h >>> 13)) >>> 0, 1274126177)) >>> 0;
+  return (h & 0xffffff) / 0xffffff;
+}
+function cellularF2F1(x, y, z, cell) {
+  const gx = x / cell, gy = y / cell, gz = z / cell;
+  const ix = Math.floor(gx), iy = Math.floor(gy), iz = Math.floor(gz);
+  let f1 = 1e9, f2 = 1e9;
+  for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+    const cx = ix + dx, cy = iy + dy, cz = iz + dz;
+    const sx = cx + hash3(cx, cy, cz, 1), sy = cy + hash3(cx, cy, cz, 2), sz = cz + hash3(cx, cy, cz, 3);
+    const dd = Math.hypot(gx - sx, gy - sy, gz - sz);
+    if (dd < f1) { f2 = f1; f1 = dd; } else if (dd < f2) { f2 = dd; }
+  }
+  return f2 - f1;
+}
+function valueNoise(x, y, z, cell) {
+  const gx = x / cell, gy = y / cell, gz = z / cell;
+  const ix = Math.floor(gx), iy = Math.floor(gy), iz = Math.floor(gz);
+  const fx = gx - ix, fy = gy - iy, fz = gz - iz;
+  const wx = fx * fx * (3 - 2 * fx), wy = fy * fy * (3 - 2 * fy), wz = fz * fz * (3 - 2 * fz);
+  let v = 0;
+  for (let dx = 0; dx <= 1; dx++) for (let dy = 0; dy <= 1; dy++) for (let dz = 0; dz <= 1; dz++) {
+    const h = hash3(ix + dx, iy + dy, iz + dz, 9);
+    v += h * (dx ? wx : 1 - wx) * (dy ? wy : 1 - wy) * (dz ? wz : 1 - wz);
+  }
+  return v;
+}
+// height field in ~[0,1]; centered later. Crumpled = multi-octave ridged creases + curl + tooth.
+function makeHeight(o) {
+  return (x, y, z) => {
+    let crease = 0, amp = 1, tot = 0, cell = o.cell;
+    for (let i = 0; i < o.octaves; i++) {
+      const dd = cellularF2F1(x, y, z, cell);
+      const ridge = Math.pow(Math.min(Math.max(1 - dd / o.crease_w, 0), 1), o.ridge_p);
+      crease += amp * ridge; tot += amp; amp *= 0.55; cell *= 0.5;
+    }
+    crease /= tot;
+    const curl = valueNoise(x, y, z, o.cell * 1.7);
+    const tooth = valueNoise(x, y, z, 5.0);
+    return (1 - o.curl - o.tooth) * crease + o.curl * curl + o.tooth * tooth;
+  };
+}
+
+// ---- main -----------------------------------------------------------------
+// offset = [ox,oy,oz] world placement of this tile (for seamless arrays).
+function texturize(mesh, d, opts = {}) {
+  const o = { ...TEX_DEFAULTS, ...opts };
+  const off = opts.offset || [0, 0, 0];
+  const VP = mesh.vertProperties, TV = mesh.triVerts;
+  const F = TV.length / 3;
+  const height = makeHeight(o);
+
+  // geometry constants for face classification (pot axis), from derived params d
+  const AX0 = [d.cx, d.p0y, d.p0z], AXD = [0, d.ay, d.az];
+  const BOXD = d.box_d, OD0 = d.od0, RATE = d.rate, CUPLEN = d.cup_len2, OUTT = d.out_top;
+  const axisSR = (px, py, pz) => {
+    const rx = px - AX0[0], ry = py - AX0[1], rz = pz - AX0[2];
+    const s = rx * AXD[0] + ry * AXD[1] + rz * AXD[2];
+    const ax = rx - s * AXD[0], ay = ry - s * AXD[1], az = rz - s * AXD[2];
+    return [s, Math.hypot(ax, ay, az), [ax, ay, az]];
+  };
+  const coneR = (s) => OD0 / 2 + (RATE / 2) * s;
+
+  // per-face normal + centroid
+  const fnx = new Float64Array(F), fny = new Float64Array(F), fnz = new Float64Array(F);
+  const textured = new Uint8Array(F);
+  const fcx = new Float64Array(F), fcy = new Float64Array(F), fcz = new Float64Array(F);
+  for (let f = 0; f < F; f++) {
+    const a = TV[f * 3] * 3, b = TV[f * 3 + 1] * 3, c = TV[f * 3 + 2] * 3;
+    const ux = VP[b] - VP[a], uy = VP[b + 1] - VP[a + 1], uz = VP[b + 2] - VP[a + 2];
+    const vx = VP[c] - VP[a], vy = VP[c + 1] - VP[a + 1], vz = VP[c + 2] - VP[a + 2];
+    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const L = Math.hypot(nx, ny, nz) || 1; nx /= L; ny /= L; nz /= L;
+    fnx[f] = nx; fny[f] = ny; fnz[f] = nz;
+    const cx = (VP[a] + VP[b] + VP[c]) / 3, cy = (VP[a + 1] + VP[b + 1] + VP[c + 1]) / 3, cz = (VP[a + 2] + VP[b + 2] + VP[c + 2]) / 3;
+    fcx[f] = cx; fcy[f] = cy; fcz[f] = cz;
+    // classify: front cone shell OR front box panel
+    const [s, r, radv] = axisSR(cx, cy, cz);
+    const rl = Math.hypot(radv[0], radv[1], radv[2]) || 1;
+    const radOut = (nx * radv[0] + ny * radv[1] + nz * radv[2]) / rl;
+    const coneShell = Math.abs(r - coneR(s)) < 1.8 && radOut > 0.15 && cy > 55 && s > 0 && s < CUPLEN + 1;
+    const panel = ny > 0.6 && Math.abs(cy - BOXD) < 1.5;
+    textured[f] = (coneShell || panel) ? 1 : 0;
+  }
+
+  // per-vertex normal from textured faces only (displacement direction)
+  const nV = VP.length / 3;
+  const vnx = new Float64Array(nV), vny = new Float64Array(nV), vnz = new Float64Array(nV);
+  for (let f = 0; f < F; f++) if (textured[f]) for (let k = 0; k < 3; k++) {
+    const vi = TV[f * 3 + k]; vnx[vi] += fnx[f]; vny[vi] += fny[f]; vnz[vi] += fnz[f];
+  }
+  for (let i = 0; i < nV; i++) { const L = Math.hypot(vnx[i], vny[i], vnz[i]) || 1; vnx[i] /= L; vny[i] /= L; vnz[i] /= L; }
+
+  // edge -> incident faces; flags
+  const ekey = (a, b) => (a < b ? a * 2654435761 + b : b * 2654435761 + a);
+  const edgeFaces = new Map();
+  for (let f = 0; f < F; f++) {
+    const v = [TV[f * 3], TV[f * 3 + 1], TV[f * 3 + 2]];
+    for (const [a, b] of [[v[0], v[1]], [v[1], v[2]], [v[2], v[0]]]) {
+      const k = ekey(a, b); let e = edgeFaces.get(k); if (!e) edgeFaces.set(k, e = []); e.push(f);
+    }
+  }
+  const SEAMT = 0.6; // mm tolerance for tile-seam planes
+  const onSeam = (i, j) => {
+    const xi = VP[i * 3], xj = VP[j * 3], zi = VP[i * 3 + 2], zj = VP[j * 3 + 2];
+    const nearX0 = Math.abs(xi) < SEAMT && Math.abs(xj) < SEAMT;
+    const nearXW = Math.abs(xi - d.mod_w) < SEAMT && Math.abs(xj - d.mod_w) < SEAMT;
+    const nearZ0 = Math.abs(zi) < SEAMT && Math.abs(zj) < SEAMT;
+    const nearZH = Math.abs(zi - d.mod_h) < SEAMT && Math.abs(zj - d.mod_h) < SEAMT;
+    return nearX0 || nearXW || nearZ0 || nearZH;
+  };
+  // edge needs subdivision if adjacent to any textured face; "smoothBoundary" = adjacent to a
+  // non-textured face AND not on a tile seam (feather there to stay watertight; NOT on seams).
+  const edgeTex = new Map(), edgeFeather = new Map();
+  for (const [k, fs] of edgeFaces) {
+    let anyT = false, anyS = false; for (const f of fs) { if (textured[f]) anyT = true; else anyS = true; }
+    edgeTex.set(k, anyT);
+    edgeFeather.set(k, anyT && anyS);
+  }
+
+  const TARGET = o.target_edge;
+  const nseg = (ax, ay, az, bx, by, bz) => Math.min(40, Math.max(1, Math.round(Math.hypot(bx - ax, by - ay, bz - az) / TARGET)));
+
+  // output with global vertex weld keyed by original (un-displaced) position
+  const outV = []; const outF = []; const pool = new Map();
+  const q = (x) => Math.round(x / 2e-3);
+  const disp = (px, py, pz, vi, w) => {
+    const h = height(px + off[0], py + off[1], pz + off[2]) - 0.5; // centered
+    const dmag = o.amp * h * w;
+    return [px + vnx[vi] * dmag, py + vny[vi] * dmag, pz + vnz[vi] * dmag];
+  };
+  // weld using original position key but the stored coordinate is the displaced one
+  const getv = (ox, oy, oz, dx, dy, dz) => {
+    const key = q(ox) + ',' + q(oy) + ',' + q(oz);
+    let idx = pool.get(key);
+    if (idx === undefined) { idx = outV.length / 3; pool.set(key, idx); outV.push(dx, dy, dz); }
+    return idx;
+  };
+
+  for (let f = 0; f < F; f++) {
+    const i0 = TV[f * 3], i1 = TV[f * 3 + 1], i2 = TV[f * 3 + 2];
+    const P = [[VP[i0 * 3], VP[i0 * 3 + 1], VP[i0 * 3 + 2]], [VP[i1 * 3], VP[i1 * 3 + 1], VP[i1 * 3 + 2]], [VP[i2 * 3], VP[i2 * 3 + 1], VP[i2 * 3 + 2]]];
+    const es = [[i0, i1], [i1, i2], [i2, i0]];
+    const ns = es.map(([a, b]) => edgeTex.get(ekey(a, b)) ? nseg(VP[a * 3], VP[a * 3 + 1], VP[a * 3 + 2], VP[b * 3], VP[b * 3 + 1], VP[b * 3 + 2]) : 1);
+    const tex = textured[f];
+
+    if (Math.max(...ns) === 1) { // no subdivision: emit (welded, displaced only if textured corner)
+      const idx = [0, 1, 2].map((k) => {
+        const vi = TV[f * 3 + k]; const [x, y, z] = P[k];
+        if (tex) { const [dx, dy, dz] = disp(x, y, z, vi, 1); return getv(x, y, z, dx, dy, dz); }
+        return getv(x, y, z, x, y, z);
+      });
+      outF.push(idx[0], idx[1], idx[2]); continue;
+    }
+
+    // build face local frame (u,v) in the face plane
+    const e1 = norm(sub(P[1], P[0]));
+    const e2 = norm(cross([fnx[f], fny[f], fnz[f]], e1));
+    const toUV = (Q) => [dot(sub(Q, P[0]), e1), dot(sub(Q, P[0]), e2)];
+    const uv3 = P.map(toUV);
+
+    // boundary points along each edge (shared edge -> same count -> watertight)
+    const pts = []; // 3d
+    for (let k = 0; k < 3; k++) { const [ai, bi] = [k, (k + 1) % 3]; const n = ns[k]; for (let t = 0; t < n; t++) { const u = t / n; pts.push([P[ai][0] + (P[bi][0] - P[ai][0]) * u, P[ai][1] + (P[bi][1] - P[ai][1]) * u, P[ai][2] + (P[bi][2] - P[ai][2]) * u]); } }
+    // interior grid (only for textured faces)
+    if (tex) {
+      const T = [[uv3[1][0] - uv3[0][0], uv3[2][0] - uv3[0][0]], [uv3[1][1] - uv3[0][1], uv3[2][1] - uv3[0][1]]];
+      const det = T[0][0] * T[1][1] - T[0][1] * T[1][0];
+      if (Math.abs(det) > 1e-9) {
+        const inv = [[T[1][1] / det, -T[0][1] / det], [-T[1][0] / det, T[0][0] / det]];
+        const us = uv3.map((p) => p[0]), vs = uv3.map((p) => p[1]);
+        const umin = Math.min(...us) - 1, umax = Math.max(...us) + 1, vmin = Math.min(...vs) - 1, vmax = Math.max(...vs) + 1;
+        const hstep = TARGET * 0.866; let row = 0;
+        for (let vv = vmin; vv < vmax; vv += hstep, row++) {
+          for (let uu = umin + (row % 2 ? TARGET / 2 : 0); uu < umax; uu += TARGET) {
+            const bu = uu - uv3[0][0], bv = vv - uv3[0][1];
+            const beta = inv[0][0] * bu + inv[0][1] * bv, gamma = inv[1][0] * bu + inv[1][1] * bv, alpha = 1 - beta - gamma;
+            if (beta > 1e-6 && gamma > 1e-6 && alpha > 1e-6) {
+              // distance to each edge >= 0.45*target (avoid sliver tris)
+              let ok = true;
+              for (let k = 0; k < 3; k++) { const a = uv3[k], b = uv3[(k + 1) % 3]; const ev = [b[0] - a[0], b[1] - a[1]]; const el = Math.hypot(ev[0], ev[1]) + 1e-12; const dd = Math.abs((uu - a[0]) * ev[1] - (vv - a[1]) * ev[0]) / el; if (dd < 0.45 * TARGET) { ok = false; break; } }
+              if (ok) pts.push([P[0][0] + (uu - uv3[0][0]) * e1[0] + (vv - uv3[0][1]) * e2[0], P[0][1] + (uu - uv3[0][0]) * e1[1] + (vv - uv3[0][1]) * e2[1], P[0][2] + (uu - uv3[0][0]) * e1[2] + (vv - uv3[0][1]) * e2[2]]);
+            }
+          }
+        }
+      }
+    }
+    // 2d coords + dedup, then Delaunay
+    const uvp = pts.map(toUV);
+    const seen = new Map(); const keep = [];
+    for (let i = 0; i < uvp.length; i++) { const kk = q(uvp[i][0]) + ',' + q(uvp[i][1]); if (!seen.has(kk)) { seen.set(kk, 1); keep.push(i); } }
+    const KP = keep.map((i) => pts[i]); const KUV = keep.map((i) => uvp[i]);
+    if (KP.length < 3) { const idx = [0, 1, 2].map((k) => getv(P[k][0], P[k][1], P[k][2], P[k][0], P[k][1], P[k][2])); outF.push(idx[0], idx[1], idx[2]); continue; }
+    const del = new Delaunator(KUV.flat());
+    // barycentric->normal interpolation + displacement weight (feather smooth-boundary, not seams)
+    const T2 = [[uv3[1][0] - uv3[0][0], uv3[2][0] - uv3[0][0]], [uv3[1][1] - uv3[0][1], uv3[2][1] - uv3[0][1]]];
+    const det2 = T2[0][0] * T2[1][1] - T2[0][1] * T2[1][0] || 1e-9;
+    const inv2 = [[T2[1][1] / det2, -T2[0][1] / det2], [-T2[1][0] / det2, T2[0][0] / det2]];
+    const idxMap = KP.map((Q, qi) => {
+      const x = Q[0], y = Q[1], z = Q[2];
+      if (!tex) return getv(x, y, z, x, y, z);
+      // bary -> vertex normal
+      const bu = KUV[qi][0] - uv3[0][0], bv = KUV[qi][1] - uv3[0][1];
+      const beta = inv2[0][0] * bu + inv2[0][1] * bv, gamma = inv2[1][0] * bu + inv2[1][1] * bv, alpha = 1 - beta - gamma;
+      let Nx = alpha * vnx[i0] + beta * vnx[i1] + gamma * vnx[i2];
+      let Ny = alpha * vny[i0] + beta * vny[i1] + gamma * vny[i2];
+      let Nz = alpha * vnz[i0] + beta * vnz[i1] + gamma * vnz[i2];
+      const NL = Math.hypot(Nx, Ny, Nz) || 1; Nx /= NL; Ny /= NL; Nz /= NL;
+      // feather weight: distance to smooth-boundary edges (not seams) / TAPER
+      let w = 1;
+      for (let k = 0; k < 3; k++) {
+        const [a, b] = es[k];
+        if (edgeFeather.get(ekey(a, b)) && !onSeam(a, b)) {
+          const A = P[k], B = P[(k + 1) % 3]; const ab = sub(B, A); const L = Math.hypot(...ab) + 1e-12;
+          const cr = cross(sub(Q, A), [ab[0] / L, ab[1] / L, ab[2] / L]); const dd = Math.hypot(...cr);
+          w = Math.min(w, Math.min(Math.max(dd / 4.0, 0), 1));
+        }
+      }
+      const hh = height(x + off[0], y + off[1], z + off[2]) - 0.5;
+      const dm = o.amp * hh * w;
+      return getv(x, y, z, x + Nx * dm, y + Ny * dm, z + Nz * dm);
+    });
+    const tri = del.triangles;
+    for (let t = 0; t < tri.length; t += 3) {
+      let a = tri[t], b = tri[t + 1], c = tri[t + 2];
+      // orient to match face normal (delaunay is CCW in uv; flip if needed)
+      const A = KUV[a], B = KUV[b], C = KUV[c];
+      const area2 = (B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]);
+      if (Math.abs(area2) < 1e-4) continue;
+      if (area2 < 0) { const tmp = b; b = c; c = tmp; }
+      outF.push(idxMap[a], idxMap[b], idxMap[c]);
+    }
+  }
+  return { vertProperties: new Float32Array(outV), triVerts: new Uint32Array(outF), textured };
+}
+
+function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+function norm(a) { const L = Math.hypot(...a) || 1; return [a[0] / L, a[1] / L, a[2] / L]; }
+
+// ============================ app ============================
+const wasm = await ManifoldModule({ locateFile: () => 'https://cdn.jsdelivr.net/npm/manifold-3d@3.5.1/manifold.wasm' });
+wasm.setup();
+const Manifold = wasm.Manifold;
+
+const app = document.getElementById('app');
+const busy = document.getElementById('busy');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio); renderer.setSize(innerWidth, innerHeight);
+app.appendChild(renderer.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x1a1c20);
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 1, 5000);
+camera.position.set(280, 240, 420);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 1.1));
+const dl = new THREE.DirectionalLight(0xffffff, 1.3); dl.position.set(0.5, 1, 0.8); scene.add(dl);
+const dl2 = new THREE.DirectionalLight(0xffffff, 0.5); dl2.position.set(-0.6, 0.3, -0.7); scene.add(dl2);
+const mat = new THREE.MeshStandardMaterial({ color: 0xcaa64a, roughness: 0.85, metalness: 0.0, flatShading: false, side: THREE.DoubleSide });
+
+const params = {
+  // box / pot
+  tilt: 40, pot_height: 148, box_d: 66, side_gap: 15,
+  // back lattice
+  back_lattice: true, lat_cell: 18, lat_wall: 7, lat_ydepth: 30,
+  // texture
+  tex_on: false, amp: 1.6, cell: 17, octaves: 3, curl: 0.24, target_edge: 2.8,
+  // array
+  nx: 3, nz: 3, gap: 0,
+  // actions
+  rebuild: () => rebuild(true),
+  exportCombined: () => exportCombinedSTL(),
+  exportParts: () => exportPartsZip(),
+};
+
+let group = new THREE.Group(); scene.add(group);
+let cache = null;           // { d, planterMesh, connectorMesh, pinMesh, baseMesh }
+let centerOffset = new THREE.Vector3();
+
+function geoParams() {
+  return { tilt: params.tilt, pot_height: params.pot_height, box_d: params.box_d, side_gap: params.side_gap,
+    back_lattice: params.back_lattice, lat_cell: params.lat_cell, lat_wall: params.lat_wall, lat_ydepth: params.lat_ydepth };
+}
+function texOpts(offset) {
+  return { offset, amp: params.amp, cell: params.cell, octaves: params.octaves, curl: params.curl, target_edge: params.target_edge };
+}
+function meshArrays(m) { return { vertProperties: m.vertProperties, triVerts: m.triVerts }; }
+
+function buildGeometry() {
+  const parts = build(Manifold, geoParams());
+  const pm = parts.planter.getMesh();
+  cache = {
+    d: parts.d,
+    planterMesh: meshArrays(pm),
+    connectorMesh: meshArrays(parts.connector.getMesh()),
+    pinMesh: meshArrays(parts.pin.getMesh()),
+    baseMesh: meshArrays(parts.base.getMesh()),
+  };
+  parts.planter.delete(); parts.connector.delete(); parts.pin.delete(); parts.base.delete();
+}
+
+function tileOffset(ix, iz) { return [ix * (cache.d.mod_w + params.gap), 0, iz * (cache.d.mod_h + params.gap)]; }
+
+// each tile textured in its own GLOBAL frame -> seam-continuous across the array
+function tileMesh(ix, iz) {
+  const off = tileOffset(ix, iz);
+  if (params.tex_on) return { mesh: texturize(cache.planterMesh, cache.d, texOpts(off)), off };
+  return { mesh: cache.planterMesh, off };
+}
+
+function toBufferGeometry(mesh, off) {
+  const vp = mesh.vertProperties, tv = mesh.triVerts;
+  const pos = new Float32Array(vp.length);
+  for (let i = 0; i < vp.length; i += 3) { pos[i] = vp[i] + off[0]; pos[i + 1] = vp[i + 1] + off[1]; pos[i + 2] = vp[i + 2] + off[2]; }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setIndex(new THREE.BufferAttribute(tv instanceof Uint32Array ? tv : new Uint32Array(tv), 1));
+  g.computeVertexNormals();
+  return g;
+}
+
+function clearGroup() { for (const c of group.children) { c.geometry.dispose(); } group.clear(); }
+
+function rebuild(regeo = true) {
+  busy.style.display = 'flex';
+  requestAnimationFrame(() => setTimeout(() => {
+    try {
+      if (regeo || !cache) buildGeometry();
+      clearGroup();
+      let tris = 0;
+      for (let iz = 0; iz < params.nz; iz++) for (let ix = 0; ix < params.nx; ix++) {
+        const { mesh, off } = tileMesh(ix, iz);
+        tris += mesh.triVerts.length / 3;
+        group.add(new THREE.Mesh(toBufferGeometry(mesh, off), mat));
+      }
+      // center the array in view
+      const d = cache.d;
+      const totW = (params.nx - 1) * (d.mod_w + params.gap) + d.mod_w;
+      const totH = (params.nz - 1) * (d.mod_h + params.gap) + d.mod_h;
+      centerOffset.set(-(totW) / 2 + d.mod_w / 2, -d.box_d / 2, -(totH) / 2 + d.mod_h / 2);
+      group.position.copy(centerOffset);
+      // HUD
+      document.getElementById('arr').textContent = params.nx + '×' + params.nz;
+      document.getElementById('tot').textContent = totW.toFixed(0) + '×' + totH.toFixed(0) + 'mm';
+      document.getElementById('unit').textContent = d.mod_w.toFixed(1) + '×' + d.mod_h.toFixed(1) + '×' + d.box_d.toFixed(0);
+      document.getElementById('tris').textContent = tris.toLocaleString();
+    } catch (e) { alert('构建失败: ' + e.message); console.error(e); }
+    busy.style.display = 'none';
+  }, 10));
+}
+
+// ---- STL export -----------------------------------------------------------
+function meshesToSTL(list /* [{mesh, off}] */) {
+  let nt = 0; for (const it of list) nt += it.mesh.triVerts.length / 3;
+  const buf = new ArrayBuffer(84 + nt * 50); const dv = new DataView(buf);
+  dv.setUint32(80, nt, true); let o = 84;
+  for (const it of list) {
+    const vp = it.mesh.vertProperties, tv = it.mesh.triVerts, f = it.off || [0, 0, 0];
+    for (let i = 0; i < tv.length; i += 3) {
+      const a = tv[i] * 3, b = tv[i + 1] * 3, c = tv[i + 2] * 3;
+      const P = [[vp[a] + f[0], vp[a + 1] + f[1], vp[a + 2] + f[2]], [vp[b] + f[0], vp[b + 1] + f[1], vp[b + 2] + f[2]], [vp[c] + f[0], vp[c + 1] + f[1], vp[c + 2] + f[2]]];
+      let nx = (P[1][1] - P[0][1]) * (P[2][2] - P[0][2]) - (P[1][2] - P[0][2]) * (P[2][1] - P[0][1]);
+      let ny = (P[1][2] - P[0][2]) * (P[2][0] - P[0][0]) - (P[1][0] - P[0][0]) * (P[2][2] - P[0][2]);
+      let nz = (P[1][0] - P[0][0]) * (P[2][1] - P[0][1]) - (P[1][1] - P[0][1]) * (P[2][0] - P[0][0]);
+      const L = Math.hypot(nx, ny, nz) || 1;
+      dv.setFloat32(o, nx / L, true); dv.setFloat32(o + 4, ny / L, true); dv.setFloat32(o + 8, nz / L, true); o += 12;
+      for (const v of P) { dv.setFloat32(o, v[0], true); dv.setFloat32(o + 4, v[1], true); dv.setFloat32(o + 8, v[2], true); o += 12; }
+      dv.setUint16(o, 0, true); o += 2;
+    }
+  }
+  return new Blob([buf], { type: 'model/stl' });
+}
+function download(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); }
+
+function allTiles() {
+  if (!cache) buildGeometry();
+  const list = [];
+  for (let iz = 0; iz < params.nz; iz++) for (let ix = 0; ix < params.nx; ix++) {
+    const off = tileOffset(ix, iz);
+    const mesh = params.tex_on ? texturize(cache.planterMesh, cache.d, texOpts(off)) : cache.planterMesh;
+    list.push({ mesh, off });
+  }
+  return list;
+}
+function exportCombinedSTL() {
+  busy.style.display = 'flex';
+  setTimeout(() => { download(meshesToSTL(allTiles()), 'wall_planter_array_' + params.nx + 'x' + params.nz + '.stl'); busy.style.display = 'none'; }, 10);
+}
+async function exportPartsZip() {
+  busy.style.display = 'flex';
+  await new Promise(r => setTimeout(r, 10));
+  if (!cache) buildGeometry();
+  const zip = new JSZip();
+  // each planter as its own object, textured in its ARRAY frame but written at origin,
+  // so reassembling the pieces in the array reproduces the seamless texture.
+  for (let iz = 0; iz < params.nz; iz++) for (let ix = 0; ix < params.nx; ix++) {
+    const off = tileOffset(ix, iz);
+    const mesh = params.tex_on ? texturize(cache.planterMesh, cache.d, texOpts(off)) : cache.planterMesh;
+    zip.file('planter_r' + iz + '_c' + ix + '.stl', await meshesToSTL([{ mesh, off: [0, 0, 0] }]).arrayBuffer());
+  }
+  zip.file('connector.stl', await meshesToSTL([{ mesh: cache.connectorMesh }]).arrayBuffer());
+  zip.file('pin.stl', await meshesToSTL([{ mesh: cache.pinMesh }]).arrayBuffer());
+  zip.file('base.stl', await meshesToSTL([{ mesh: cache.baseMesh }]).arrayBuffer());
+  const blob = await zip.generateAsync({ type: 'blob' });
+  download(blob, 'wall_planter_parts_' + params.nx + 'x' + params.nz + '.zip');
+  busy.style.display = 'none';
+}
+
+// ---- GUI ------------------------------------------------------------------
+const gui = new GUI({ title: '参数' });
+const fBox = gui.addFolder('盒子 / 花盆');
+fBox.add(params, 'side_gap', 6, 40, 1).name('侧边距(→宽)').onFinishChange(() => rebuild());
+fBox.add(params, 'box_d', 40, 120, 1).name('盒厚(进深)').onFinishChange(() => rebuild());
+fBox.add(params, 'tilt', 20, 60, 1).name('花盆倾角°').onFinishChange(() => rebuild());
+fBox.add(params, 'pot_height', 80, 200, 1).name('花盆总高').onFinishChange(() => rebuild());
+const fLat = gui.addFolder('背板镂空');
+fLat.add(params, 'back_lattice').name('开启镂空').onChange(() => rebuild());
+fLat.add(params, 'lat_cell', 8, 30, 1).name('六角对边').onFinishChange(() => rebuild());
+fLat.add(params, 'lat_wall', 3, 14, 0.5).name('筋宽').onFinishChange(() => rebuild());
+fLat.add(params, 'lat_ydepth', 6, 66, 1).name('掏空深').onFinishChange(() => rebuild());
+const fTex = gui.addFolder('表面纹理(替换式)');
+fTex.add(params, 'tex_on').name('烘焙纹理').onChange(() => rebuild(false));
+fTex.add(params, 'amp', 0, 3, 0.05).name('起伏幅度').onFinishChange(() => { if (params.tex_on) rebuild(false); });
+fTex.add(params, 'cell', 6, 40, 1).name('折痕尺度').onFinishChange(() => { if (params.tex_on) rebuild(false); });
+fTex.add(params, 'octaves', 1, 4, 1).name('倍频').onFinishChange(() => { if (params.tex_on) rebuild(false); });
+fTex.add(params, 'curl', 0, 0.6, 0.02).name('卷曲占比').onFinishChange(() => { if (params.tex_on) rebuild(false); });
+fTex.add(params, 'target_edge', 1.5, 5, 0.1).name('网格密度(mm)').onFinishChange(() => { if (params.tex_on) rebuild(false); });
+const fArr = gui.addFolder('阵列');
+fArr.add(params, 'nx', 1, 6, 1).name('列(横)').onChange(() => rebuild(false));
+fArr.add(params, 'nz', 1, 6, 1).name('行(竖)').onChange(() => rebuild(false));
+fArr.add(params, 'gap', 0, 30, 0.5).name('模块间距').onChange(() => rebuild(false));
+const fExp = gui.addFolder('导出');
+fExp.add(params, 'rebuild').name('↻ 重新构建');
+fExp.add(params, 'exportCombined').name('⬇ 整列 STL(一体)');
+fExp.add(params, 'exportParts').name('⬇ 拆分零件 ZIP');
+
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+(function animate() { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); })();
+rebuild(true);
+</script>
+</body>
+</html>
