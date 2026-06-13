@@ -133,3 +133,14 @@ C. ✅ **背板网格减料**(back_lattice, 默认开): 背面 openwork 六角�
    注意权衡: 背面减重会使重心略前移(抗前倾稍弱), 低填充时影响很小且有稳定底座兜底;
    内腔为贴墙隐藏式(经Ø lat_cell 背孔通风/通外), 切片若需内支撑可减小 lat_ydepth 或关 back_lattice。
    只动背面: 左右侧壁/前壳/盆/储水/落水全不变(用户指定"只做背板")。
+
+## v5.4 纹理整体放大(texturize.py, 2026-06-13, 用户: 放大比例/深度, 降密度, 强起伏, 多层级, 大弯曲)
+> 只改纹理参数, 几何(planter_v5.stl)与算法不变; 仅外凸不减壁、近水密逻辑同 v5.1.2。
+> 对标 crumpled-paper-generator 滑块: density / intensity / octaves。
+- AMP    1.8→3.0  : 褶皱总振幅↑ → 起伏更强、深度更大。
+- CELL   17→26    : Voronoi 折痕基准间距↑ → 密集度更低、整体比例放大(物理折痕宽=CREASE_W×CELL 同步变粗)。
+- OCTAVES 3→4     : 倍频层数↑ → 褶皱层级更多(放大后最细元胞 26×0.5³≈3.25mm, 与旧版最细 4.25mm 相近, TARGET_EDGE=2.0 采样仍够)。
+- CURL   0.24→0.36: 大尺度值噪声占比↑ + 其波长=CELL×1.7 随之放大 → 纸张整体弯曲度更大。
+- TOOTH  0.18→0.12: 细颗粒底纹↓ → 让放大后的大褶皱更突出(折痕占比 1-CURL-TOOTH≈0.52)。
+- 产物: planter_v5_tex.stl(二进制, 52610面, 拓扑/面数同旧版) + viewer_tex.html(可交互预览) + tex_v54_compare.png(放大前后对比)。
+- 重跑: cd filesv2 && python3 texturize.py planter_v5.stl planter_v5_tex.stl (需 numpy+scipy)。
