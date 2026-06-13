@@ -195,3 +195,7 @@ C. ✅ **背板网格减料**(back_lattice, 默认开): 背面 openwork 六角�
 - 自检: potcheck/shaftcheck/tilecheck/rescheck/latticecheck/latticepot 全空(加宽后盆/井/横拼/储水/网格均不破)。
 - 3×3+底座 总尺寸(wall33 实测 bbox): 宽 590.6 × 高 679.4(=底座16+3×221.13) × 深 236(底座前后展开) mm。预览 v54_wall33.png。
 - 连接筒/插销不随宽度变(connector_v5.stl/pin_v5.stl 不变)。
+- v5.4.1 锁定整体目标尺寸(用户): 3×3+底座 宽=60cm、高=72.3cm。
+  side_gap 28.33→29.9 (mod_w=200 => 横拼3 总宽=600); top_margin 8→22.54 (mod_h=235.667 => 底座16+3×235.667=723)。
+  单件三轴 200×235.67×199.28 均 ≤240(高度接近上限, 仍合规)。texturize _SIDEG 同步 29.9。重导 unit/base/tex/viewer。
+  实测总尺寸: 宽 600 × 高 723 × 深 236 mm。自检全空。

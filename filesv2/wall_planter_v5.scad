@@ -35,7 +35,7 @@ mouth_ext = 6;       // 盆口端外伸(口完整张开; v5.3 由16↓6 => 檐�
 box_d     = 66;      // 箱深
 pot_back  = 28;      // 盆底外缘伸出箱背量
 back_t    = 6;       // 背板带厚
-side_gap  = 28.3333; // 锥盆两侧到箱边距(加宽: 由15→28.33, 单元宽 +80/3mm => 横拼3 总宽 +80mm; 真盆/盆腔不变)
+side_gap  = 29.9;    // 锥盆两侧到箱边距(加宽: 单元宽 mod_w=200 => 横拼3 总宽=600mm; 真盆/盆腔不变)
 res_h     = 25;      // 储水/排水腔净高
 lens_open = 5;       // 浸水窗高(盆腔最低点低于储水顶板, 盆底探进)
 
@@ -123,7 +123,7 @@ tot_d = mod_d - back_y;
 
 apex_mouth = p0z + cup_len2*az + (od1/2)*ay;
 apex_lip   = op_z + ((out_top + 2*(lip_on ? lip_w : 0))/2)*ay;
-top_margin = 8;
+top_margin = 22.54;  // 单元顶留白(由8加高=>mod_h=235.667; 堆叠3+底座16 => 总高=723mm=72.3cm)
 mod_h = max(apex_mouth, apex_lip) + top_margin;
 
 vent_z = p0z + 8;
