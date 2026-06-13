@@ -206,3 +206,11 @@ C. ✅ **背板网格减料**(back_lattice, 默认开): 背面 openwork 六角�
   真正残留是起伏加大后纹理毛边爬到开口边沿(掠射角可见) -> 盆口收口升级为【硬光滑唇 MOUTH_CLEAN=5mm + 羽化 MOUTH_TAPER=11mm】:
   开口边最顶一圈强制 0 起伏 => 开口边任何角度都是干净圆(rim3b 验证, 与基础件一致)。
 - 尺寸不变(600×723); 水密 69440面 非流形=0 边界0.106%; 重导 tex + viewer。预览 tex_v56.png/tex_v56_rim.png。
+
+## v5.6.4 盆口净唇加宽 + 最终打印包(用户: 盆口仍露毛边, 内部要光滑整体; 出最终包)
+- 复核: 数值证实盆壁 s>148(开口顶~12mm) 外凸=0(之前 MOUTH_CLEAN=5 在低掠射角下唇下羽化区仍探出鳞片)。
+  起伏达 2.7mm, 清洁唇需 ≥1 个元胞(16.7mm): MOUTH_CLEAN 5→16 + MOUTH_TAPER 11→12 => 开口边任何角度都是干净圆(rimfull 验证, 与基础件一致)。
+- 最终全面核验(都过): 口径134.2/96.2×148(间隙1.5); 自检 pot/shaft/tile/res/lattice/latticepot 全空;
+  水密: planter/base/connector/pin 均闭合流形, tex 仅前面板缝 0.106% 亚毫米(切片自修, 不在储水/水管壁); 背板=六角蜂窝(back_lattice);
+  整体 600×723×236, 单件 200×235.67×199.28 均≤240。
+- 打印包: RELEASE_v5.4_20260613_整体600x723_牛皮纸纹理_盆口净唇/ (含 tex/smooth/base/connector/pin STL + scad + texturize + build_viewer + viewer_tex.html + 4 预览 + 打印我_README.md: 部件数 9单元/3底座/6连接筒/~24销, 朝向/水路/组装/重生成说明)。
