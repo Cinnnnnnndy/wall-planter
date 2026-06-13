@@ -1,0 +1,13 @@
+import Module from 'manifold-3d';
+import { buildCrumpled } from './crumple.mjs';
+import { writeBinarySTL } from './stlutil.mjs';
+const wasm = await Module(); wasm.setup(); const { Manifold } = wasm;
+const arg = Object.fromEntries(process.argv.slice(2).map(s=>s.split('=')));
+const cOpts = {}; for(const k of ['amp','cell','oct','tilt','mix','warp','bias','inClamp','el']) if(arg[k]!==undefined) cOpts[k]=+arg[k];
+const t0=Date.now();
+const { module, d } = buildCrumpled(Manifold, { back_lattice:false }, cOpts);
+const bb = module.boundingBox();
+console.log('opts', JSON.stringify(cOpts));
+console.log(`vol ${(module.volume()/1000).toFixed(0)}cc bbox ${(bb.max[0]-bb.min[0]).toFixed(0)}x${(bb.max[1]-bb.min[1]).toFixed(0)}x${(bb.max[2]-bb.min[2]).toFixed(0)} genus ${module.genus()} tris ${module.getMesh().triVerts.length/3} in ${Date.now()-t0}ms`);
+writeBinarySTL(arg.out||'/tmp/cm.stl', module);
+console.log('wrote', arg.out||'/tmp/cm.stl');

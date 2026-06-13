@@ -1,0 +1,10 @@
+import Module from 'manifold-3d';
+import { buildCrumpled } from './crumple.mjs';
+import { writeBinarySTL } from './stlutil.mjs';
+const wasm = await Module(); wasm.setup(); const { Manifold } = wasm;
+const A = buildCrumpled(Manifold, { back_lattice:false }, { amp:9, el:2.0, offset:[0,0,0] });
+const W = A.d.mod_w;
+const B = buildCrumpled(Manifold, { back_lattice:false }, { amp:9, el:2.0, offset:[W,0,0] });
+const pair = A.module.add(B.module.translate([W,0,0]));
+writeBinarySTL('/tmp/cm_pair.stl', pair);
+console.log('pair tris', pair.getMesh().triVerts.length/3, 'W', W.toFixed(1));
