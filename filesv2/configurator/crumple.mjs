@@ -5,14 +5,13 @@
 import { DEFAULTS, derive } from './geometry.mjs';
 
 export const CRUMPLE_DEFAULTS = {
-  amp: 9,        // fold depth (mm) — locked
-  cell: 44,      // facet size (mm); smaller = more fold lines
-  detail: 0.4,   // 2nd-scale fold-line amount (0 = few big facets, ~0.7 = many creases)
-  tilt: 0.9,     // per-facet tilt (steeper -> sharper creases)
-  bias: 0.35,    // outward bias 0..1 (folds bulge out; keeps inner wall)
-  rot: 1,        // rotate domain per layer (straight creases, de-gridded)
-  inClamp: 2.5,  // max inward displacement (mm) — protects the 3mm cup wall
-  el: 1.2,       // voxel edge length (mm)
+  intensity: 0.2,  // 起伏强度 — fold depth multiplier (gentle, paper-like)
+  cell: 38,        // octave-0 Voronoi seed spacing (mm); smaller = denser folds
+  octaves: 5,      // 褶皱层级
+  curl: 0,         // 纸张整体弯曲 — macro curl amount (0 = none)
+  rot: 1,          // rotate domain per octave (de-grid)
+  inClamp: 2.2,    // max inward displacement (mm) — protects the 3mm cup wall
+  el: 1.2,         // voxel edge length (mm)
   seed: 7,
   offset: [0, 0, 0], // global/array offset -> seamless tiling
 };
@@ -34,30 +33,39 @@ function makeField(o) {
   };
   const ROT = [0, 1, 2, 3, 4, 5, 6].map(rotmat);
   const ap = (R, x, y, z) => [R[0] * x + R[1] * y + R[2] * z, R[3] * x + R[4] * y + R[5] * z, R[6] * x + R[7] * y + R[8] * z];
-  // envelope of random tilted planes over a rotated jittered lattice => FLAT facets + STRAIGHT creases.
-  // sign>0 = max (convex: V-groove VALLEY creases); sign<0 = min (concave: RIDGE creases).
-  const env = (x, y, z, cell, salt, sign) => {
+  const vnoise = (x, y, z, salt) => {
+    const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+    const fx = x - ix, fy = y - iy, fz = z - iz;
+    const wx = fx * fx * (3 - 2 * fx), wy = fy * fy * (3 - 2 * fy), wz = fz * fz * (3 - 2 * fz);
+    let v = 0;
+    for (let dx = 0; dx <= 1; dx++) for (let dy = 0; dy <= 1; dy++) for (let dz = 0; dz <= 1; dz++)
+      v += hash3(ix + dx, iy + dy, iz + dz, salt) * (dx ? wx : 1 - wx) * (dy ? wy : 1 - wy) * (dz ? wz : 1 - wz);
+    return v * 2 - 1;
+  };
+  // F2-F1 "crackle" x per-cell random SIGN (ZhouWu crumpled-paper algorithm): each Voronoi cell
+  // bulges UP or DOWN; cells meet at a sharp branching crease network. Sign flips where F2-F1->0
+  // so it stays continuous with a sharp V-crease at every cell boundary. cell = seed spacing (mm).
+  const crackleOct = (x, y, z, cell, oct) => {
     let X = x, Y = y, Z = z;
-    if (o.rot) { const r = ap(ROT[salt], x, y, z); X = r[0]; Y = r[1]; Z = r[2]; }
+    if (o.rot) { const r = ap(ROT[oct % 7], x, y, z); X = r[0]; Y = r[1]; Z = r[2]; }
     const gx = X / cell, gy = Y / cell, gz = Z / cell;
     const ix = Math.floor(gx), iy = Math.floor(gy), iz = Math.floor(gz);
-    let best = sign > 0 ? -1e9 : 1e9;
+    let f1 = 1e18, f2 = 1e18, sgn = 1;
     for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
       const cx = ix + dx, cy = iy + dy, cz = iz + dz;
-      const sx = cx + hash3(cx, cy, cz, salt * 4 + 1), sy = cy + hash3(cx, cy, cz, salt * 4 + 2), sz = cz + hash3(cx, cy, cz, salt * 4 + 3);
-      const hc = hash3(cx, cy, cz, salt * 4 + 7) * 2 - 1;
-      const tx = hash3(cx, cy, cz, salt * 4 + 8) * 2 - 1, ty = hash3(cx, cy, cz, salt * 4 + 9) * 2 - 1, tz = hash3(cx, cy, cz, salt * 4 + 10) * 2 - 1;
-      const plane = hc + o.tilt * (tx * (gx - sx) + ty * (gy - sy) + tz * (gz - sz));
-      if (sign > 0) { if (plane > best) best = plane; } else { if (plane < best) best = plane; }
+      const sx = cx + hash3(cx, cy, cz, oct * 5 + 1), sy = cy + hash3(cx, cy, cz, oct * 5 + 2), sz = cz + hash3(cx, cy, cz, oct * 5 + 3);
+      const ddx = gx - sx, ddy = gy - sy, ddz = gz - sz; const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+      if (d2 < f1) { f2 = f1; f1 = d2; sgn = hash3(cx, cy, cz, oct * 5 + 4) > 0.5 ? 1 : -1; }
+      else if (d2 < f2) f2 = d2;
     }
-    return best;
+    return (Math.sqrt(f2) - Math.sqrt(f1)) * cell * sgn;   // mm, signed
   };
-  // flat facets bounded by straight fold lines; valley(max) + ridge(min) creases.
+  // multi-octave (reference: 4x seeds -> cell*0.5; weight 1/2.2^oct) + optional macro curl. Returns mm.
   return (x, y, z) => {
-    let h = env(x, y, z, o.cell, 1, +1) + env(x, y, z, o.cell * 0.92, 2, -1);
-    let w = 2;
-    if (o.detail > 0) { h += o.detail * (env(x, y, z, o.cell * 0.5, 3, +1) + env(x, y, z, o.cell * 0.52, 4, -1)); w += 2 * o.detail; }
-    return 0.62 * h / w + o.bias;
+    let h = 0, cell = o.cell, w = 1;
+    for (let i = 0; i < o.octaves; i++) { h += crackleOct(x, y, z, cell, i) * w; cell *= 0.5; w /= 2.2; }
+    if (o.curl > 0) h += (vnoise(x * 0.03, y * 0.03, z * 0.03, 71) * 15 + vnoise(x * 0.08, y * 0.08, z * 0.08, 72) * 5) * o.curl;
+    return h;
   };
 }
 
@@ -95,11 +103,11 @@ export function buildCrumpled(Manifold, params = {}, cOpts = {}) {
     const px = pt[0], py = pt[1], pz = pt[2];
     const base = Math.max(sdBox(px, py, pz), sdCup(px, py, pz));
     const fade = Math.min(Math.max(pz / bot, 0), 1);          // 0 at bottom -> flat base
-    let dz = o.amp * field(px + off[0], py + off[1], pz + off[2]) * fade;
+    let dz = o.intensity * field(px + off[0], py + off[1], pz + off[2]) * fade;
     if (dz < -o.inClamp) dz = -o.inClamp;                     // protect cup wall / cavity
     return base + dz;
   };
-  const m = o.amp + 6;
+  const m = 14;
   const crumpled = Manifold.levelSet(sdf,
     { min: [-m, d.back_y - m, -3], max: [W + m, d.mod_d + m, H + m] }, o.el);
 

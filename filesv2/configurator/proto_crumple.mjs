@@ -7,15 +7,13 @@ const wasm = await Module(); wasm.setup();
 const { Manifold } = wasm;
 
 const arg = Object.fromEntries(process.argv.slice(2).map(s => s.split('=')));
-const AMP = +(arg.amp ?? 4);          // fold depth (mm)
-const CELL = +(arg.cell ?? 40);       // base facet size (mm)
-const OCT = +(arg.oct ?? 2);          // octaves
-const TILT = +(arg.tilt ?? 0.7);      // per-facet tilt (bigger = steeper facets)
-const DETAIL = +(arg.detail ?? 0.5); // 2nd-scale fold-line amount (more = more creases)
-const BIAS = +(arg.bias ?? 0.0);      // outward bias 0..1
-const ROTA = +(arg.rot ?? 1);         // rotate domain per layer (1 = de-grid straight creases)
-const HOLLOW = +(arg.hollow ?? 0);    // 1 = subtract smooth inner cavity + open top
-const EL = +(arg.el ?? 1.6);          // voxel edge length (mm)
+const INTENSITY = +(arg.intensity ?? 0.6); // 起伏强度 — overall fold depth (reference ~0.6)
+const CELL = +(arg.cell ?? 30);            // octave-0 Voronoi spacing (mm); smaller = denser folds
+const OCT = +(arg.oct ?? 5);               // 褶皱层级 octaves
+const CURL = +(arg.curl ?? 0);             // 纸张整体弯曲 — macro curl amount
+const ROTA = +(arg.rot ?? 1);              // rotate domain per octave (de-grid)
+const HOLLOW = +(arg.hollow ?? 0);         // 1 = subtract smooth inner cavity
+const EL = +(arg.el ?? 1.4);               // voxel edge length (mm)
 const SEED = 7;
 
 function hash3(ix, iy, iz, salt) {
@@ -34,30 +32,40 @@ function rotmat(seed) {
 const ROT = [0, 1, 2, 3, 4, 5, 6].map(rotmat);
 const ap = (R, x, y, z) => [R[0] * x + R[1] * y + R[2] * z, R[3] * x + R[4] * y + R[5] * z, R[6] * x + R[7] * y + R[8] * z];
 
-// envelope of random tilted planes over a (rotated) jittered lattice => FLAT facets + STRAIGHT creases.
-// sign>0 = max (convex: V-groove VALLEY creases); sign<0 = min (concave: RIDGE creases).
-function env(x, y, z, cell, salt, sign) {
+// 3D value noise (for the optional macro curl)
+function vnoise(x, y, z, salt) {
+  const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+  const fx = x - ix, fy = y - iy, fz = z - iz;
+  const wx = fx * fx * (3 - 2 * fx), wy = fy * fy * (3 - 2 * fy), wz = fz * fz * (3 - 2 * fz);
+  let v = 0;
+  for (let dx = 0; dx <= 1; dx++) for (let dy = 0; dy <= 1; dy++) for (let dz = 0; dz <= 1; dz++)
+    v += hash3(ix + dx, iy + dy, iz + dz, salt) * (dx ? wx : 1 - wx) * (dy ? wy : 1 - wy) * (dz ? wz : 1 - wz);
+  return v * 2 - 1;
+}
+// F2-F1 "crackle" (one octave) x per-cell random SIGN: cells bulge UP or DOWN, meeting at a sharp
+// branching crease network (= ZhouWu reference algorithm). The sign flips where F2-F1->0, so it's
+// continuous with a sharp V-crease at every Voronoi boundary. cell = seed spacing in mm.
+function crackleOct(x, y, z, cell, oct) {
   let X = x, Y = y, Z = z;
-  if (ROTA) { const r = ap(ROT[salt], x, y, z); X = r[0]; Y = r[1]; Z = r[2]; }
+  if (ROTA) { const r = ap(ROT[oct % 7], x, y, z); X = r[0]; Y = r[1]; Z = r[2]; }
   const gx = X / cell, gy = Y / cell, gz = Z / cell;
   const ix = Math.floor(gx), iy = Math.floor(gy), iz = Math.floor(gz);
-  let best = sign > 0 ? -1e9 : 1e9;
+  let f1 = 1e18, f2 = 1e18, sgn = 1;
   for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
     const cx = ix + dx, cy = iy + dy, cz = iz + dz;
-    const sx = cx + hash3(cx, cy, cz, salt * 4 + 1), sy = cy + hash3(cx, cy, cz, salt * 4 + 2), sz = cz + hash3(cx, cy, cz, salt * 4 + 3);
-    const hc = hash3(cx, cy, cz, salt * 4 + 7) * 2 - 1;
-    const tx = hash3(cx, cy, cz, salt * 4 + 8) * 2 - 1, ty = hash3(cx, cy, cz, salt * 4 + 9) * 2 - 1, tz = hash3(cx, cy, cz, salt * 4 + 10) * 2 - 1;
-    const plane = hc + TILT * (tx * (gx - sx) + ty * (gy - sy) + tz * (gz - sz));
-    if (sign > 0) { if (plane > best) best = plane; } else { if (plane < best) best = plane; }
+    const sx = cx + hash3(cx, cy, cz, oct * 5 + 1), sy = cy + hash3(cx, cy, cz, oct * 5 + 2), sz = cz + hash3(cx, cy, cz, oct * 5 + 3);
+    const ddx = gx - sx, ddy = gy - sy, ddz = gz - sz; const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+    if (d2 < f1) { f2 = f1; f1 = d2; sgn = hash3(cx, cy, cz, oct * 5 + 4) > 0.5 ? 1 : -1; }
+    else if (d2 < f2) f2 = d2;
   }
-  return best;
+  return (Math.sqrt(f2) - Math.sqrt(f1)) * cell * sgn;   // mm, signed
 }
-// flat facets bounded by straight fold lines; both valley (max) and ridge (min) creases.
+// multi-octave crackle (reference: 4x seeds -> cell*0.5; weight 1/2.2^oct) + optional macro curl
 function crumple(x, y, z) {
-  let h = env(x, y, z, CELL, 1, +1) + env(x, y, z, CELL * 0.92, 2, -1);
-  let w = 2;
-  if (DETAIL > 0) { h += DETAIL * (env(x, y, z, CELL * 0.5, 3, +1) + env(x, y, z, CELL * 0.52, 4, -1)); w += 2 * DETAIL; }
-  return 0.62 * h / w + BIAS;   // ~[-1,1]
+  let h = 0, cell = CELL, w = 1;
+  for (let o = 0; o < OCT; o++) { h += crackleOct(x, y, z, cell, o) * w; cell *= 0.5; w /= 2.2; }
+  if (CURL > 0) h += (vnoise(x * 0.03, y * 0.03, z * 0.03, 71) * 15 + vnoise(x * 0.08, y * 0.08, z * 0.08, 72) * 5) * CURL;
+  return INTENSITY * h;   // mm displacement
 }
 
 // pot-like truncated cone, axis = z, positive-inside SDF
@@ -70,8 +78,8 @@ function sdfCone(x, y, z) {
 }
 const t0 = Date.now();
 const crumpled = Manifold.levelSet(
-  (p) => sdfCone(p[0], p[1], p[2]) + AMP * crumple(p[0], p[1], p[2]),
-  { min: [-r1 - AMP - 4, -r1 - AMP - 4, -AMP - 4], max: [r1 + AMP + 4, r1 + AMP + 4, H + AMP + 4] },
+  (p) => sdfCone(p[0], p[1], p[2]) + crumple(p[0], p[1], p[2]),
+  { min: [-r1 - 18, -r1 - 18, -18], max: [r1 + 18, r1 + 18, H + 18] },
   EL
 );
 // optionally hollow: subtract smooth inner cone (cavity stays smooth) + open top
@@ -81,7 +89,7 @@ if (HOLLOW) {
   pot = Manifold.difference(crumpled, inner);
 }
 const mesh = pot.getMesh();
-console.log(`AMP=${AMP} CELL=${CELL} TILT=${TILT} DETAIL=${DETAIL} BIAS=${BIAS} ROT=${ROTA} HOLLOW=${HOLLOW} EL=${EL}`);
+console.log(`INTENSITY=${INTENSITY} CELL=${CELL} OCT=${OCT} CURL=${CURL} ROT=${ROTA} HOLLOW=${HOLLOW} EL=${EL}`);
 console.log(`tris ${mesh.triVerts.length / 3}  vol ${(pot.volume() / 1000).toFixed(0)}cc  in ${Date.now() - t0}ms`);
 
 const vp = mesh.vertProperties, tv = mesh.triVerts, nt = tv.length / 3;
