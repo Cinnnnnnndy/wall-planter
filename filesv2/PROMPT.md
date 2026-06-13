@@ -156,3 +156,18 @@ C. ✅ **背板网格减料**(back_lattice, 默认开): 背面 openwork 六角�
 - 用户强调: 纹理只对【前面板+花盆外壳+挡土唇】向外 offset 出体积, 不影响花盆内腔/箱体内部(选面逻辑同前, 未变)。
 - 产物: planter_v5_tex.stl(二进制, 69514面) + viewer_tex.html(重建) + tex_v55_compare.png(v5.4脊线 vs v5.5小平面) + tex_v55.png(特写)。
 - 微调指南: 更密→SEEDS↑(CELL随√反比变小); 更深→INTENSITY↑(AMP=3×强度); 层级→OCTAVES; 要整体弯曲→CURL>0。
+
+## v5.6 调强度/弯曲 + 修两处问题(texturize.py, 2026-06-13, 用户反馈两张截图)
+> 滑块: 起伏强度 0.7→1.0(AMP 2.1→3.0)、纸张整体弯曲 0→0.5。两处修复:
+- 【强度/弯曲】INTENSITY=1.0 → AMP=3.0mm(褶皱深度); CURL=0.5 → CURL_AMP=3.0×0.5=1.5mm。
+  弯曲改为【独立低频外凸 swell】(curl 双频值噪声 clip 正向 ×CURL_AMP), 叠加在褶皱上, 不削弱褶皱; 总外凸≤AMP+CURL_AMP。
+- 【修复1: 前面板放射条纹】根因=OpenSCAD 把"矩形挖圆孔"切成 196 个细长 fan 三角(最长边 79~221mm, 长宽比到 244)。
+  remesh_panel(): 把共面前面板当整块平面, 板内铺均匀 hex 格点重新三角化取代细条; 边界共形——
+  所有边界边按 nseg 打点(邻面因 edge_tex=True 都会按 nseg 细分, 必须逐点焊接); 外框边羽化、孔边不羽化(纹理连续翻到锥壁);
+  Delaunay 填凸包(含孔)→ 按"重心在板材区内"剔除跨孔伪三角(point-in-polygon even-odd)。
+- 【修复2: 盆口穿模】根因=v5.5 把有符号场 p2..p98 归一化, 折痕基线被抬到 ~1.4mm(整层外凸), 盆口被往内顶。
+  改为【只取正向凸起】: disp = AMP·clip(crackle/p96, 0,1) + CURL_AMP·clip(curl/p96, 0,1); 负向 clip 到 0(贴原面),
+  无基线整层外凸 → 盆口不再被顶进内腔。位移方向仍用纹理面平均法线, 仅外凸。
+- 水密自检: 输出 60656 面, 非流形边=0, 边界边 0.132%(均为面板缝处亚毫米细缝, 切片器自动修补; 优于历史 0.375%)。
+- 产物: planter_v5_tex.stl(60656面) + viewer_tex.html(重建) + tex_v56.png(正面/盆口/立体) + tex_v56_bugfix.png(修复前后对比)。
+- 微调指南: 强度→INTENSITY(AMP=3×强度); 弯曲→CURL(swell=3×CURL); 密度→SEEDS; 层级→OCTAVES。

@@ -18,21 +18,23 @@ IN  = sys.argv[1] if len(sys.argv) > 1 else "planter_v5.stl"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "planter_v5_tex.stl"
 
 # ---- 可调参数 -------------------------------------------------------------
-# v5.5 直接对齐参考工具 crumpled-paper-generator 的 5 个滑块(用户给定一组数值):
-#   网格分辨率 res=400 / 褶皱密集度 seeds=36 / 褶皱层级 octaves=5 / 起伏强度 intensity=0.7 / 纸张整体弯曲 curl=0。
-#   算法改为参考的【有符号 F2-F1 crackle】(每个元胞随机 ± -> 一块块小平面/折痕), 而非旧版的单向脊线网。
-#   3D 物体表面用我们的 3D 元胞噪声实现同一组合; 取 1 参考单位 = 1mm。
-#   仅外凸(用户要求): 纹理只把"前面板+花盆外壳+挡土唇"这层【向外 offset 出体积】, 花盆内腔/箱体内部不变。
-#   实现: 把有符号场按全局 p2..p98 归一化到 [0,1] 再 ×AMP -> disp>=0, 只加料、不减壁、不缩腔。
+# v5.6 对齐参考工具滑块 + 修两处问题(用户反馈):
+#   滑块: 网格分辨率400 / 褶皱密集度seeds36 / 褶皱层级oct5 / 起伏强度intensity=1.0 / 纸张整体弯曲curl增大。
+#   算法用参考的【有符号 F2-F1 crackle】(每元胞随机± -> 小平面折痕); 取 1 参考单位 = 1mm。
+#   仅外凸(用户要求): 只把"前面板+花盆外壳+挡土唇"向外 offset 出体积, 花盆内腔/箱体内部不变。
+#   【修复1】前面板原始网格是细长 fan 三角形(放射条纹) -> 对整块平面板【重新均匀网格化】(见 remesh_panel)。
+#   【修复2】盆口穿模 -> 位移改为【只取正向凸起】clip([0,1])(负向贴原面, 无基线整层外凸), 盆口不再被顶进腔。
+#   起伏强度=AMP(褶皱深度); 整体弯曲=CURL_AMP(独立低频外凸 swell, 叠加在褶皱上, 不削弱褶皱)。
 SEEDS       = 36      # 褶皱密集度(种子数, 参考滑块) → 基准元胞 CELL = PAPER/√SEEDS
 OCTAVES     = 5       # 褶皱层级(参考滑块)
-INTENSITY   = 0.7     # 起伏强度(参考滑块) → 物理外凸振幅 AMP = 3.0×INTENSITY
-CURL        = 0.0     # 纸张整体弯曲(参考滑块; 0 = 不做大尺度起伏)
+INTENSITY   = 1.0     # 起伏强度(参考滑块, 用户加到1) → 褶皱外凸深度 AMP = 3.0×INTENSITY
+CURL        = 0.5     # 纸张整体弯曲(参考滑块, 用户由0增大) → 低频 swell 振幅 CURL_AMP = 3.0×CURL
 PAPER       = 100.0   # 参考逻辑纸张尺寸(取单位=mm)
 FALLOFF     = 2.2     # 每层权重衰减(参考: weight = intensity / 2.2^oct)
 TARGET_EDGE = 1.6     # 细分目标边长(mm) 越小越细; 参考 res 拉满(400) → 取较细值以多解析高倍频
 CELL        = PAPER / SEEDS**0.5          # 基准 Voronoi 元胞间距(mm) ≈ 16.67 (octave0)
-AMP         = round(3.0 * INTENSITY, 2)   # 物理最大外凸(mm); intensity=0.7 → 2.1
+AMP         = round(3.0 * INTENSITY, 2)   # 褶皱外凸深度(mm); intensity=1.0 → 3.0
+CURL_AMP    = round(3.0 * CURL, 2)        # 大尺度弯曲 swell 外凸深度(mm); curl=0.5 → 1.5
 TAPER       = 4.0     # 与光滑面相邻边界的羽化宽度(mm)
 SEAM_BOOST  = 0.5     # 盆×箱相贯线处的振幅增强倍率(+50%, 柔和熔接)
 SEAM_SIGMA  = 16.0    # 增强带宽度(mm, 高斯)
@@ -217,26 +219,30 @@ def value_noise(P, cell):
                 val += h*wx*wy*wz
     return val   # 0..1
 
-def signed_field(P):
-    """参考 crumpled-paper-generator 的有符号 F2-F1 折痕场(物理 mm):
-       每层 octave 种子数×4(间距÷2)、权重 INTENSITY/FALLOFF^oct, 每元胞随机 ± -> 小平面折痕;
-       可选大尺度卷曲 CURL(参考的双频值噪声)。返回有符号值(后续全局归一化到外凸)。"""
+def crackle_field(P):
+    """参考的有符号 F2-F1 折痕场(物理 mm): 每层种子数×4(间距÷2)、权重 INTENSITY/FALLOFF^oct,
+       每元胞随机 ± -> 一块块小平面折痕。返回有符号值(后续 clip 到正向, 负向贴原面)。"""
     h = np.zeros(len(P))
     for k in range(OCTAVES):
         cell_k = CELL / (2.0**k)                   # 种子数×4 ⇔ 元胞间距÷2
         d, sgn = cellular_f2f1(P, cell_k)
-        crackle = d * cell_k                       # (F2-F1) 物理折痕(mm)
-        w = INTENSITY / (FALLOFF**k)
-        h += crackle * w * sgn
-    if CURL > 0:                                   # 参考: valueNoise(·0.03)*15 + valueNoise(·0.08)*5
-        c = (2*value_noise(P, 1/0.03) - 1)*15.0 + (2*value_noise(P, 1/0.08) - 1)*5.0
-        h += c * CURL
+        h += (d * cell_k) * (INTENSITY / (FALLOFF**k)) * sgn
     return h
 
-# 全局归一化(p2..p98): 把有符号场映射到【仅外凸】[0,1] -> ×AMP (只加料、不减壁、不缩腔)
-_fv = signed_field(V)
-H_LO = float(np.percentile(_fv, 2.0)); H_HI = float(np.percentile(_fv, 98.0))
-print(f"折痕场 p2={H_LO:.3f} p98={H_HI:.3f}  CELL≈{CELL:.2f}mm AMP={AMP}mm 倍频={OCTAVES} 种子={SEEDS} curl={CURL}")
+def curl_field(P):
+    """参考的大尺度卷曲(双频值噪声), 作为独立的低频外凸 swell -> 纸张整体弯曲。"""
+    return (2*value_noise(P, 1/0.03) - 1)*15.0 + (2*value_noise(P, 1/0.08) - 1)*5.0
+
+# 全局尺度(p96): 把【正向】场映射到 [0,1]; 负向 clip 到 0(贴原面 -> 无基线整层外凸 -> 不顶盆口)
+_cr = crackle_field(V); SCALE_CR = float(np.percentile(_cr, 96.0)); SCALE_CR = SCALE_CR if SCALE_CR>1e-6 else 1.0
+_cu = curl_field(V);    SCALE_CU = float(np.percentile(_cu, 96.0)); SCALE_CU = SCALE_CU if SCALE_CU>1e-6 else 1.0
+def disp_t(P):
+    """外凸位移(mm, >=0): 褶皱(clip正向)×AMP + 低频弯曲 swell(clip正向)×CURL_AMP。"""
+    t = AMP * np.clip(crackle_field(P)/SCALE_CR, 0, 1)
+    if CURL_AMP > 0:
+        t = t + CURL_AMP * np.clip(curl_field(P)/SCALE_CU, 0, 1)
+    return t
+print(f"crackle p96={SCALE_CR:.3f} curl p96={SCALE_CU:.3f}  CELL≈{CELL:.2f}mm AMP={AMP} CURL_AMP={CURL_AMP} 倍频={OCTAVES} 种子={SEEDS}")
 
 # ---- 共形细分: 逐边一致的段数 + Delaunay 三角化 + 全局顶点焊接(水密) -----
 from scipy.spatial import Delaunay as _Del
@@ -263,7 +269,87 @@ def getv(orig, disp):
 out_faces = []
 CORNER = np.array([[1.,0,0],[0,1,0],[0,0,1]])   # 三角三个角的重心
 
+# ---- 前面板整体重网格(修复1): 替换 OpenSCAD 的细长 fan 三角形(放射条纹根源) ----
+# 共面前面板(法线≈+Y, y≈BOXD)当作整块平面: 板内铺均匀 hex 格点重新三角化, 取代细条。
+# 边界共形: 与锥壁(纹理)相邻的"孔边"按 nseg 打点(焊到锥壁); 与光滑面相邻的"外框边"仅留端点+羽化。
+panel_tex = panel & textured
+def remesh_panel():
+    pidx = np.where(panel_tex)[0]
+    if len(pidx) == 0: return
+    pn = fn[pidx].mean(0); pn = pn/(np.linalg.norm(pn)+1e-12)        # 面板法线≈+Y
+    a1 = np.array([1.0,0,0]); a1 = a1 - pn*(a1@pn)
+    if np.linalg.norm(a1) < 1e-6:
+        a1 = np.array([0,0,1.0]); a1 = a1 - pn*(a1@pn)
+    a1 /= np.linalg.norm(a1); a2 = np.cross(pn, a1)
+    p0 = V[faces[pidx[0],0]]
+    def to2(Q): return np.stack([(Q-p0)@a1, (Q-p0)@a2], axis=-1)
+    cnt = {}
+    for fi in pidx:
+        a,b,c = faces[fi]
+        for e in ((a,b),(b,c),(c,a)):
+            kk = tuple(sorted(e)); cnt[kk] = cnt.get(kk,0)+1
+    hole=[]; outer=[]
+    for e,n in cnt.items():
+        if n != 1: continue                                          # 板内边(消除掉)
+        nb = [f for f in edge_faces[e] if not panel_tex[f]]
+        (hole if any(textured[f] for f in nb) else outer).append(e)
+    # 所有边界边都按 nseg 打点: 邻面(锥壁或箱体侧)因本边 edge_tex=True 都会按 nseg 细分,
+    # 必须逐点对齐才水密(hole/outer 仅区分是否羽化, 不影响打点)。
+    bpts=[]                                                          # 边界打点(原坐标 -> 焊接)
+    for (va,vb) in (hole+outer):
+        m = nseg(V[va],V[vb])
+        for t in range(m+1): bpts.append(V[va]*(1-t/m)+V[vb]*(t/m))
+    bpts = np.array(bpts)
+    seg = np.array([[V[a],V[b]] for (a,b) in (hole+outer)])
+    seg2 = to2(seg.reshape(-1,3)).reshape(-1,2,2)
+    A = seg2[:,0,:]; B = seg2[:,1,:]
+    allv = np.unique(np.concatenate([faces[fi] for fi in pidx]))
+    vv = to2(V[allv]); umin,vmin = vv.min(0); umax,vmax = vv.max(0)
+    hstep = TARGET_EDGE*0.866; rows = np.arange(vmin+hstep, vmax, hstep); lat=[]
+    for ri,yv in enumerate(rows):
+        us = np.arange(umin + (TARGET_EDGE/2 if ri%2 else 0) + 0.3*TARGET_EDGE, umax, TARGET_EDGE)
+        if len(us): lat.append(np.stack([us, np.full(len(us),yv)],1))
+    lat = np.concatenate(lat,0) if lat else np.zeros((0,2))
+    def inside(Q):
+        qy = Q[:,1][:,None]; ay=A[:,1][None,:]; by=B[:,1][None,:]
+        cross = (ay>qy) != (by>qy)
+        ix = A[:,0][None,:] + (qy-ay)/(by-ay+1e-12)*(B[:,0][None,:]-A[:,0][None,:])
+        return ((cross & (Q[:,0][:,None] < ix)).sum(1) % 2) == 1
+    def dist2seg(Q):
+        AB=B-A; L2=(AB**2).sum(1)+1e-12; d=np.full(len(Q),1e9)
+        for j in range(len(A)):
+            ap=Q-A[j]; tt=np.clip((ap@AB[j])/L2[j],0,1)
+            d=np.minimum(d, np.linalg.norm(Q-(A[j]+tt[:,None]*AB[j]),axis=1))
+        return d
+    if len(lat):
+        lat = lat[inside(lat) & (dist2seg(lat) > 0.5*TARGET_EDGE)]
+    P2 = np.concatenate([to2(bpts), lat],0)
+    kk = np.round(P2/2e-3).astype(np.int64); _,uq = np.unique(kk,axis=0,return_index=True)
+    P2 = P2[np.sort(uq)]
+    if len(P2) < 3: return
+    P3d = p0[None,:] + P2[:,0:1]*a1[None,:] + P2[:,1:2]*a2[None,:]
+    tri = _Del(P2)
+    mask = np.ones(len(P3d))                                         # 仅外框边羽化(孔边不羽化)
+    for (va,vb) in outer:
+        Aa=V[va]; AB=V[vb]-V[va]; Ll=np.linalg.norm(AB)+1e-12
+        mask = np.minimum(mask, np.clip(np.linalg.norm(np.cross(P3d-Aa, AB/Ll),axis=1)/TAPER,0,1))
+    disp = disp_t(P3d)*mask*seam_gain(P3d)
+    Pd = P3d + pn[None,:]*disp[:,None]
+    ixv = [getv(P3d[i], Pd[i]) for i in range(len(P3d))]
+    # 剔除跨"孔"的伪三角(Delaunay 填的是凸包, 含孔; 孔内无点 -> 跨孔三角重心落在孔内): 仅保留重心在板材区内。
+    keep = inside(P2[tri.simplices].mean(1))
+    for si,s in enumerate(tri.simplices):
+        if not keep[si]: continue
+        ar = abs((P2[s[1],0]-P2[s[0],0])*(P2[s[2],1]-P2[s[0],1])
+               - (P2[s[1],1]-P2[s[0],1])*(P2[s[2],0]-P2[s[0],0]))
+        if ar < 1e-4: continue
+        a,b,c = ixv[s[0]],ixv[s[1]],ixv[s[2]]
+        tn = np.cross(P3d[s[1]]-P3d[s[0]], P3d[s[2]]-P3d[s[0]])
+        if np.dot(tn, pn) < 0: b,c = c,b
+        out_faces.append((a,b,c))
+
 for fi in range(F):
+    if panel_tex[fi]: continue                       # 面板交给 remesh_panel 整体处理
     vi = faces[fi]; P3 = V[vi]; N3 = vn[vi]
     es = [tuple(sorted((vi[a], vi[b]))) for a,b in ((0,1),(1,2),(2,0))]
     # 该面任一边需细分? 否则原样输出单三角(绝大多数光滑面走这里)
@@ -338,8 +424,7 @@ for fi in range(F):
                 A,B = P3[a], P3[b]; AB = B-A; L = np.linalg.norm(AB)+1e-12
                 d = np.linalg.norm(np.cross(P-A, AB/L), axis=1)
                 mask = np.minimum(mask, np.clip(d/TAPER,0,1))
-        t = np.clip((signed_field(P) - H_LO)/(H_HI - H_LO + 1e-9), 0, 1)
-        disp = AMP * t * mask * seam_gain(P)       # >=0: 仅外凸(offset 出体积)
+        disp = disp_t(P) * mask * seam_gain(P)     # >=0: 仅外凸(offset 出体积)
         Pd = P + Nn*disp[:,None]
     else:
         Pd = P                                       # 光滑面: 仅做共形(不位移)
@@ -355,6 +440,8 @@ for fi in range(F):
         tn = np.cross(P[s[1]]-P[s[0]], P[s[2]]-P[s[0]])
         if np.dot(tn, nf) < 0: b,c = c,b
         out_faces.append((a,b,c))
+
+remesh_panel()   # 前面板整体重网格(在锥壁等已建好孔边焊点后, 焊接共形)
 
 Vout = np.array(vcoord)
 Fout = np.array(out_faces)
