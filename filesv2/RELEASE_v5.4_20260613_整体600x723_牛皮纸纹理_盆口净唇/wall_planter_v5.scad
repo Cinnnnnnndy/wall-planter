@@ -74,7 +74,7 @@ base_wall    = 4;
 base_deck    = 3;
 
 /* [背板网格减料 v5.3 — 只开背面, 储水腔以上; 盆腔壁/落水管/储水盒/前壳/边框全保护] */
-back_lattice = true;   // 背板网格盲槽(贴墙隐藏, 纯减料/减重; 不透盆腔=最安全)
+back_lattice = false;  // v5.5减重复盘: openwork镂空增~900cm²内表面->多~95g墙皮, 低填充下得不偿失; 关掉=实心背(表面更少更轻+更稳)
 lat_cell     = 18;     // 网格窗(圆)直径
 lat_wall     = 7;      // 网格筋宽(窗间实体)
 lat_border   = 12;     // 背面四周保留实体边框宽
@@ -82,7 +82,7 @@ lat_top      = 16;     // 顶部保留高(护堆叠孔凸台)
 lat_keep     = 2.5;    // 盆壁/落水管周围额外保留余量
 lat_frontsk  = 4;      // 前壳保留厚(腔不穿到前面)
 lat_rib      = 3;      // 背面网格筋皮厚(openwork 栅格皮)
-lat_ydepth   = 30;     // 背面掏空深(自背面向前; 余下前部留实心=配重/强度。设≥box_d 则掏到前壳)
+lat_ydepth   = 30;     // 背面掏空深(仅 back_lattice=true 时生效)
 
 dev      = true;
 show_pot = false;
