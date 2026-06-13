@@ -28,8 +28,8 @@ OUT = sys.argv[2] if len(sys.argv) > 2 else "planter_v5_tex.stl"
 #   起伏强度=AMP(褶皱深度); 整体弯曲=CURL_AMP(独立低频外凸 swell)。位移恒>=0 仅外凸。
 SEEDS       = 36      # 褶皱密集度(种子数, 参考滑块) → 基准元胞 CELL = PAPER/√SEEDS
 OCTAVES     = 5       # 褶皱层级(参考滑块)
-INTENSITY   = 0.7     # 起伏强度(参考滑块) → 褶皱外凸深度 AMP = 3.0×INTENSITY  (v5.6.1 用户回调 1.0→0.7)
-CURL        = 0.0     # 纸张整体弯曲(参考滑块) → 低频 swell 振幅 CURL_AMP = 3.0×CURL  (v5.6.1 用户回调 0.5→0)
+INTENSITY   = 0.9     # 起伏强度(参考滑块) → 褶皱外凸深度 AMP = 3.0×INTENSITY  (v5.6.3 用户再加大 0.7→0.9)
+CURL        = 0.5     # 纸张整体弯曲(参考滑块) → 低频 swell 振幅 CURL_AMP = 3.0×CURL  (v5.6.3 加回并加大 0→0.5)
 PAPER       = 100.0   # 参考逻辑纸张尺寸(取单位=mm)
 FALLOFF     = 2.2     # 每层权重衰减(参考: weight = intensity / 2.2^oct)
 TARGET_EDGE = 1.6     # 细分目标边长(mm) 越小越细; 参考 res 拉满(400) → 取较细值以多解析高倍频
@@ -37,7 +37,8 @@ CELL        = PAPER / SEEDS**0.5          # 基准 Voronoi 元胞间距(mm) ≈ 
 AMP         = round(3.0 * INTENSITY, 2)   # 褶皱外凸深度(mm); intensity=1.0 → 3.0
 CURL_AMP    = round(3.0 * CURL, 2)        # 大尺度弯曲 swell 外凸深度(mm); curl=0.5 → 1.5
 TAPER       = 4.0     # 与光滑面相邻边界的羽化宽度(mm)
-MOUTH_TAPER = 9.0     # 盆口(s→CUPLEN)纹理收口宽度(mm): 顶沿羽化到光滑净口, 防纹理爬到开口边显得"穿模"
+MOUTH_CLEAN = 5.0     # 盆口最顶一圈强制 0 起伏的"光滑唇"宽(mm): 保证开口边任何角度都是干净圆(不露毛边)
+MOUTH_TAPER = 11.0    # 光滑唇之下的羽化过渡宽(mm): 由唇内沿向下 0→满, 平滑接上正常纹理
 SEAM_BOOST  = 0.5     # 盆×箱相贯线处的振幅增强倍率(+50%, 柔和熔接)
 SEAM_SIGMA  = 16.0    # 增强带宽度(mm, 高斯)
 SEED        = 7
@@ -427,8 +428,8 @@ for fi in range(F):
                 A,B = P3[a], P3[b]; AB = B-A; L = np.linalg.norm(AB)+1e-12
                 d = np.linalg.norm(np.cross(P-A, AB/L), axis=1)
                 mask = np.minimum(mask, np.clip(d/TAPER,0,1))
-        s_,_r_ = axis_sr(P)                        # 盆口收口: s→CUPLEN 处羽化到净口(防纹理爬到开口边)
-        mt = np.clip((_CUPLEN - s_)/MOUTH_TAPER, 0, 1); mt = mt*mt*(3-2*mt)
+        s_,_r_ = axis_sr(P)                        # 盆口收口: 顶端 MOUTH_CLEAN 圈强制净口, 再向下羽化
+        mt = np.clip((_CUPLEN - MOUTH_CLEAN - s_)/MOUTH_TAPER, 0, 1); mt = mt*mt*(3-2*mt)
         disp = disp_t(P) * mask * seam_gain(P) * mt   # >=0: 仅外凸(offset 出体积)
         Pd = P + Nn*disp[:,None]
     else:
