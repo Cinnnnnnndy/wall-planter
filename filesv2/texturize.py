@@ -36,7 +36,7 @@ BINARY      = True    # 二进制 STL(体积约为 ASCII 的 1/5)
 import math as _m
 _TILT=40.0; _AY=_m.cos(_m.radians(_TILT)); _AZ=_m.sin(_m.radians(_TILT))
 _WALL=3.0; _FLOOR=6.0; _RESH=25.0; _LENS=5.0; _FIT=1.5
-_PBD=93.2; _PTD=131.2; _PH=148.0; _PBACK=28.0; _MEXT=16.0
+_PBD=93.2; _PTD=131.2; _PH=148.0; _PBACK=28.0; _MEXT=6.0
 _LIPW=6.0; _LIPT=4.0; _DRIPW=1.6; _DRIPD=2.2
 _RATE=(_PTD-_PBD)/_PH
 _INB=_PBD+2*_FIT; _INT=_PTD+2*_FIT

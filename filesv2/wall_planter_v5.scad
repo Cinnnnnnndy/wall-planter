@@ -21,7 +21,7 @@ fit_clear = 1.5;     // 单边间隙
 tilt      = 40;      // 盆轴高于水平角(打印时盆轴转竖直 = 倾 90-40=50°)
 wall      = 3.0;     // 盆壁/箱壁厚
 floor_t   = 6;       // 盆底座厚(沿轴)
-mouth_ext = 16;      // 盆口端外伸(口完整张开)
+mouth_ext = 6;       // 盆口端外伸(口完整张开; v5.3 由16↓6 => 檐口沿盆轴下降10mm,贴近真盆口)
 
 /* [长方体箱 + 花盆后伸] */
 box_d     = 66;      // 箱深
@@ -43,7 +43,8 @@ conn_od     = shaft_d - 1.0;   // 连接筒外径(滑配进井)
 conn_bore   = 15;              // 连接筒内水道径
 conn_sock   = 12;              // 连接筒每端插入深
 conn_flange_d = shaft_d + 3;   // 中部止位环径(坐进井口沉孔, 叠合面仍贴平)
-conn_flange_h = 3;             // 止位环高 = 井口沉孔深
+conn_flange_h = 3;             // 止位环高
+conn_recess   = 1.0;           // 止位环顶低于叠合面的量(沉孔比环深, 上下单元贴平不被环顶开)
 
 /* [定位: 原模型只留孔, 销单独打印] */
 join_d    = 7;       // 定位孔名义径(堆叠/横拼通用)
@@ -152,9 +153,9 @@ module unit() {
 
         // 3) 落水井 = 贯通竖管(穿透顶/底面)
         translate([shaft_x, shaft_y, -1]) cylinder(h = mod_h + 2, d = shaft_d);
-        // 3b) 井口沉孔(顶端): 收层间连接筒的止位环, 叠合面贴平
-        translate([shaft_x, shaft_y, mod_h - conn_flange_h - 0.6])
-            cylinder(h = conn_flange_h + 1, d = conn_flange_d + 2*join_clear);
+        // 3b) 井口沉孔(顶端): 收层间连接筒的止位环, 沉孔比环深 conn_recess => 环顶低于叠合面, 上下贴平
+        translate([shaft_x, shaft_y, mod_h - conn_flange_h - conn_recess])
+            cylinder(h = conn_flange_h + conn_recess + 0.4, d = conn_flange_d + 2*join_clear);
         // 3c) 井口锥形导入(底端, 便于连接筒插入)
         translate([shaft_x, shaft_y, -0.01]) cylinder(h = 3, d1 = shaft_d + 3, d2 = shaft_d);
 
@@ -237,7 +238,7 @@ module keep_x(x0, kr = true) { intersection(){ children(); translate([kr?x0:x0-5
 module slab_x(x0,t=2){ intersection(){ children(); translate([x0-t/2,-300,-50]) cube([t,mod_d+600,mod_h+400]); } }
 // 堆叠预览: 两单元 + 中间连接筒
 module stack2(){ unit(); translate([0,0,mod_h]) unit();
-    translate([shaft_x,shaft_y,mod_h-conn_sock]) connector(); }
+    translate([shaft_x,shaft_y,mod_h-conn_flange_h-conn_recess-conn_sock]) connector(); }  // 落座位: 环底坐沉孔肩台
 module tile2(){ unit(); translate([mod_w,0,0]) unit(); }
 wall_w = 520; wall_h = 730;
 module wall33(nx=3,nz=3){ for(ix=[0:nx-1]){ translate([ix*mod_w,0,0]) base();
