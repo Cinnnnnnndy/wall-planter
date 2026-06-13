@@ -23,8 +23,9 @@ OUT = sys.argv[2] if len(sys.argv) > 2 else "planter_v5_tex.stl"
 #   算法用参考的【有符号 F2-F1 crackle】(每元胞随机± -> 小平面折痕); 取 1 参考单位 = 1mm。
 #   仅外凸(用户要求): 只把"前面板+花盆外壳+挡土唇"向外 offset 出体积, 花盆内腔/箱体内部不变。
 #   【修复1】前面板原始网格是细长 fan 三角形(放射条纹) -> 对整块平面板【重新均匀网格化】(见 remesh_panel)。
-#   【修复2】盆口穿模 -> 位移改为【只取正向凸起】clip([0,1])(负向贴原面, 无基线整层外凸), 盆口不再被顶进腔。
-#   起伏强度=AMP(褶皱深度); 整体弯曲=CURL_AMP(独立低频外凸 swell, 叠加在褶皱上, 不削弱褶皱)。
+#   【修复2 v5.6.2】盆口"穿模"实为纹理爬到开口边沿、把净口顶得参差 -> 加盆口收口羽化 MOUTH_TAPER:
+#     s→CUPLEN 顶沿把纹理羽化到 0(干净净口); 位移用 p2..p98 平滑归一化(同 v5.5 圆润观感, 非 clamp 尖锐)。
+#   起伏强度=AMP(褶皱深度); 整体弯曲=CURL_AMP(独立低频外凸 swell)。位移恒>=0 仅外凸。
 SEEDS       = 36      # 褶皱密集度(种子数, 参考滑块) → 基准元胞 CELL = PAPER/√SEEDS
 OCTAVES     = 5       # 褶皱层级(参考滑块)
 INTENSITY   = 0.7     # 起伏强度(参考滑块) → 褶皱外凸深度 AMP = 3.0×INTENSITY  (v5.6.1 用户回调 1.0→0.7)
@@ -36,6 +37,7 @@ CELL        = PAPER / SEEDS**0.5          # 基准 Voronoi 元胞间距(mm) ≈ 
 AMP         = round(3.0 * INTENSITY, 2)   # 褶皱外凸深度(mm); intensity=1.0 → 3.0
 CURL_AMP    = round(3.0 * CURL, 2)        # 大尺度弯曲 swell 外凸深度(mm); curl=0.5 → 1.5
 TAPER       = 4.0     # 与光滑面相邻边界的羽化宽度(mm)
+MOUTH_TAPER = 9.0     # 盆口(s→CUPLEN)纹理收口宽度(mm): 顶沿羽化到光滑净口, 防纹理爬到开口边显得"穿模"
 SEAM_BOOST  = 0.5     # 盆×箱相贯线处的振幅增强倍率(+50%, 柔和熔接)
 SEAM_SIGMA  = 16.0    # 增强带宽度(mm, 高斯)
 SEED        = 7
@@ -233,16 +235,17 @@ def curl_field(P):
     """参考的大尺度卷曲(双频值噪声), 作为独立的低频外凸 swell -> 纸张整体弯曲。"""
     return (2*value_noise(P, 1/0.03) - 1)*15.0 + (2*value_noise(P, 1/0.08) - 1)*5.0
 
-# 全局尺度(p96): 把【正向】场映射到 [0,1]; 负向 clip 到 0(贴原面 -> 无基线整层外凸 -> 不顶盆口)
-_cr = crackle_field(V); SCALE_CR = float(np.percentile(_cr, 96.0)); SCALE_CR = SCALE_CR if SCALE_CR>1e-6 else 1.0
-_cu = curl_field(V);    SCALE_CU = float(np.percentile(_cu, 96.0)); SCALE_CU = SCALE_CU if SCALE_CU>1e-6 else 1.0
+# 全局归一化: 褶皱场按 p2..p98 平滑映射到 [0,1](圆润观感, 同 v5.5; 比 clamp-正向更柔, 不发"碎/尖");
+# t∈[0,1] -> ×AMP 仍是仅外凸(只加料不减壁)。弯曲 swell 仍取正向 clip。
+_cr = crackle_field(V); CR_LO=float(np.percentile(_cr,2.0)); CR_HI=float(np.percentile(_cr,98.0))
+_cu = curl_field(V);    SCALE_CU=float(np.percentile(_cu,96.0)); SCALE_CU = SCALE_CU if SCALE_CU>1e-6 else 1.0
 def disp_t(P):
-    """外凸位移(mm, >=0): 褶皱(clip正向)×AMP + 低频弯曲 swell(clip正向)×CURL_AMP。"""
-    t = AMP * np.clip(crackle_field(P)/SCALE_CR, 0, 1)
+    """外凸位移(mm, >=0): 褶皱 p2..p98 归一化×AMP(圆润) + 低频弯曲 swell(clip正向)×CURL_AMP。"""
+    t = AMP * np.clip((crackle_field(P)-CR_LO)/(CR_HI-CR_LO+1e-9), 0, 1)
     if CURL_AMP > 0:
         t = t + CURL_AMP * np.clip(curl_field(P)/SCALE_CU, 0, 1)
     return t
-print(f"crackle p96={SCALE_CR:.3f} curl p96={SCALE_CU:.3f}  CELL≈{CELL:.2f}mm AMP={AMP} CURL_AMP={CURL_AMP} 倍频={OCTAVES} 种子={SEEDS}")
+print(f"crackle p2={CR_LO:.3f} p98={CR_HI:.3f}  CELL≈{CELL:.2f}mm AMP={AMP} CURL_AMP={CURL_AMP} 倍频={OCTAVES} 种子={SEEDS}")
 
 # ---- 共形细分: 逐边一致的段数 + Delaunay 三角化 + 全局顶点焊接(水密) -----
 from scipy.spatial import Delaunay as _Del
@@ -424,7 +427,9 @@ for fi in range(F):
                 A,B = P3[a], P3[b]; AB = B-A; L = np.linalg.norm(AB)+1e-12
                 d = np.linalg.norm(np.cross(P-A, AB/L), axis=1)
                 mask = np.minimum(mask, np.clip(d/TAPER,0,1))
-        disp = disp_t(P) * mask * seam_gain(P)     # >=0: 仅外凸(offset 出体积)
+        s_,_r_ = axis_sr(P)                        # 盆口收口: s→CUPLEN 处羽化到净口(防纹理爬到开口边)
+        mt = np.clip((_CUPLEN - s_)/MOUTH_TAPER, 0, 1); mt = mt*mt*(3-2*mt)
+        disp = disp_t(P) * mask * seam_gain(P) * mt   # >=0: 仅外凸(offset 出体积)
         Pd = P + Nn*disp[:,None]
     else:
         Pd = P                                       # 光滑面: 仅做共形(不位移)
