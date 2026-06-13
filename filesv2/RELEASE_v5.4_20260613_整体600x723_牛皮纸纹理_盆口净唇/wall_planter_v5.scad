@@ -101,8 +101,12 @@ rate = (pot_top_d - pot_bot_d) / pot_height;
 r_in = in_bot/2; r_out = out_bot/2;
 
 z_dip = wall + res_h - lens_open;        // 盆腔最低点 z
-p0y   = r_out*az - floor_t*ay - pot_back;
-p0z   = z_dip - floor_t*az + r_in*ay;
+// 花盆平移(打印盆口朝下时盆口落到箱顶前边平面=与箱边共面贴板; 仅平移, 不改盆径/高):
+// 需满足 0.766*pot_dy + 0.643*pot_dz = 5.86 (盆口在打印朝向下降5.86); 多抬升少前移 -> 给真盆留余量
+pot_dy = 7.65;
+pot_dz = 0;
+p0y   = r_out*az - floor_t*ay - pot_back + pot_dy;
+p0z   = z_dip - floor_t*az + r_in*ay + pot_dz;
 
 drip_y = p0y + floor_t*ay + r_in*az;
 drip_z = p0z + floor_t*az - r_in*ay;
@@ -123,7 +127,7 @@ tot_d = mod_d - back_y;
 
 apex_mouth = p0z + cup_len2*az + (od1/2)*ay;
 apex_lip   = op_z + ((out_top + 2*(lip_on ? lip_w : 0))/2)*ay;
-top_margin = 22.54;  // 单元顶留白(由8加高=>mod_h=235.667; 堆叠3+底座16 => 总高=723mm=72.3cm)
+top_margin = 22.54 - pot_dz;  // 顶留白(补偿平移Z分量, 保持 mod_h=235.666 总高723不变)
 mod_h = max(apex_mouth, apex_lip) + top_margin;
 
 vent_z = p0z + 8;
