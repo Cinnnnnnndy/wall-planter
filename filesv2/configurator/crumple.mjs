@@ -6,14 +6,13 @@ import { DEFAULTS, derive } from './geometry.mjs';
 
 export const CRUMPLE_DEFAULTS = {
   amp: 9,        // fold depth (mm) — locked
-  cell: 58,      // big-fold facet size (mm) — large sweeping folds
-  fine: 0.2,     // subtle fine-wrinkle amount (0 = dead-flat facets, ~0.3 = busy)
-  tilt: 1.0,     // per-facet tilt
-  mix: 0.45,     // 1 concave / 0 convex / .5 both
-  warp: 0.55,    // domain warp (organic, non-grid)
-  bias: 0.42,    // outward bias 0..1 (folds bulge out; keeps inner wall)
+  cell: 44,      // facet size (mm); smaller = more fold lines
+  detail: 0.4,   // 2nd-scale fold-line amount (0 = few big facets, ~0.7 = many creases)
+  tilt: 0.9,     // per-facet tilt (steeper -> sharper creases)
+  bias: 0.35,    // outward bias 0..1 (folds bulge out; keeps inner wall)
+  rot: 1,        // rotate domain per layer (straight creases, de-gridded)
   inClamp: 2.5,  // max inward displacement (mm) — protects the 3mm cup wall
-  el: 1.3,       // voxel edge length (mm)
+  el: 1.2,       // voxel edge length (mm)
   seed: 7,
   offset: [0, 0, 0], // global/array offset -> seamless tiling
 };
@@ -25,39 +24,40 @@ function makeField(o) {
     h = (Math.imul((h ^ (h >>> 13)) >>> 0, 1274126177)) >>> 0;
     return (h & 0xffffff) / 0xffffff;
   };
-  const vnoise = (x, y, z, salt) => {
-    const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
-    const fx = x - ix, fy = y - iy, fz = z - iz;
-    const wx = fx * fx * (3 - 2 * fx), wy = fy * fy * (3 - 2 * fy), wz = fz * fz * (3 - 2 * fz);
-    let v = 0;
-    for (let dx = 0; dx <= 1; dx++) for (let dy = 0; dy <= 1; dy++) for (let dz = 0; dz <= 1; dz++)
-      v += hash3(ix + dx, iy + dy, iz + dz, salt) * (dx ? wx : 1 - wx) * (dy ? wy : 1 - wy) * (dz ? wz : 1 - wz);
-    return v * 2 - 1;
+  // fixed per-layer rotation: creases stay STRAIGHT (no domain warp) but not axis-locked
+  const rotmat = (seed) => {
+    const a = hash3(seed, 9, 9, 41) * 6.2832, b = hash3(9, seed, 9, 42) * 6.2832, c = hash3(9, 9, seed, 43) * 6.2832;
+    const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b), cc = Math.cos(c), sc = Math.sin(c);
+    return [ca * cb, ca * sb * sc - sa * cc, ca * sb * cc + sa * sc,
+            sa * cb, sa * sb * sc + ca * cc, sa * sb * cc - ca * sc,
+            -sb, cb * sc, cb * cc];
   };
-  const octave = (x, y, z, cell) => {
-    const gx = x / cell, gy = y / cell, gz = z / cell;
+  const ROT = [0, 1, 2, 3, 4, 5, 6].map(rotmat);
+  const ap = (R, x, y, z) => [R[0] * x + R[1] * y + R[2] * z, R[3] * x + R[4] * y + R[5] * z, R[6] * x + R[7] * y + R[8] * z];
+  // envelope of random tilted planes over a rotated jittered lattice => FLAT facets + STRAIGHT creases.
+  // sign>0 = max (convex: V-groove VALLEY creases); sign<0 = min (concave: RIDGE creases).
+  const env = (x, y, z, cell, salt, sign) => {
+    let X = x, Y = y, Z = z;
+    if (o.rot) { const r = ap(ROT[salt], x, y, z); X = r[0]; Y = r[1]; Z = r[2]; }
+    const gx = X / cell, gy = Y / cell, gz = Z / cell;
     const ix = Math.floor(gx), iy = Math.floor(gy), iz = Math.floor(gz);
-    let mn = 1e9, mx = -1e9;
+    let best = sign > 0 ? -1e9 : 1e9;
     for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
       const cx = ix + dx, cy = iy + dy, cz = iz + dz;
-      const sx = cx + hash3(cx, cy, cz, 1), sy = cy + hash3(cx, cy, cz, 2), sz = cz + hash3(cx, cy, cz, 3);
-      const hc = hash3(cx, cy, cz, 7) * 2 - 1;
-      const tx = hash3(cx, cy, cz, 8) * 2 - 1, ty = hash3(cx, cy, cz, 9) * 2 - 1, tz = hash3(cx, cy, cz, 10) * 2 - 1;
+      const sx = cx + hash3(cx, cy, cz, salt * 4 + 1), sy = cy + hash3(cx, cy, cz, salt * 4 + 2), sz = cz + hash3(cx, cy, cz, salt * 4 + 3);
+      const hc = hash3(cx, cy, cz, salt * 4 + 7) * 2 - 1;
+      const tx = hash3(cx, cy, cz, salt * 4 + 8) * 2 - 1, ty = hash3(cx, cy, cz, salt * 4 + 9) * 2 - 1, tz = hash3(cx, cy, cz, salt * 4 + 10) * 2 - 1;
       const plane = hc + o.tilt * (tx * (gx - sx) + ty * (gy - sy) + tz * (gz - sz));
-      if (plane < mn) mn = plane; if (plane > mx) mx = plane;
+      if (sign > 0) { if (plane > best) best = plane; } else { if (plane < best) best = plane; }
     }
-    return o.mix * mn + (1 - o.mix) * mx;
+    return best;
   };
+  // flat facets bounded by straight fold lines; valley(max) + ridge(min) creases.
   return (x, y, z) => {
-    const ws = o.cell * 0.6, wa = o.warp * o.cell;
-    const wx = wa * vnoise(x / ws, y / ws, z / ws, 21);
-    const wy = wa * vnoise(x / ws, y / ws, z / ws, 22);
-    const wz = wa * vnoise(x / ws, y / ws, z / ws, 23);
-    x += wx; y += wy; z += wz;
-    // big sweeping folds (dominant) + medium variation + a subtle fine wrinkle
-    const big = 0.72 * octave(x, y, z, o.cell) + 0.28 * octave(x, y, z, o.cell * 0.5);
-    const fine = octave(x, y, z, o.cell * 0.26);
-    return big + o.fine * fine + o.bias;
+    let h = env(x, y, z, o.cell, 1, +1) + env(x, y, z, o.cell * 0.92, 2, -1);
+    let w = 2;
+    if (o.detail > 0) { h += o.detail * (env(x, y, z, o.cell * 0.5, 3, +1) + env(x, y, z, o.cell * 0.52, 4, -1)); w += 2 * o.detail; }
+    return 0.62 * h / w + o.bias;
   };
 }
 
@@ -119,6 +119,10 @@ export function buildCrumpled(Manifold, params = {}, cOpts = {}) {
   ];
   for (let k = 0; k < p.vent_n; k++)
     cuts.push(cyl(D + 1, p.vent_d).rotate([-90, 0, 0]).translate([d.cx + (k - (p.vent_n - 1) / 2) * 32, -0.5, d.vent_z]));
-  const module = Manifold.difference(crumpled, U(cuts));
+  const raw = Manifold.difference(crumpled, U(cuts));
+  // deep folds + booleans can pinch off tiny ~0-volume specks; keep only the main solid
+  let module = raw;
+  const comps = raw.decompose();
+  if (comps.length > 1) module = comps.reduce((best, c) => (c.volume() > best.volume() ? c : best));
   return { module, d, p, o };
 }

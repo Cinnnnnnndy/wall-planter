@@ -11,11 +11,11 @@ const AMP = +(arg.amp ?? 4);          // fold depth (mm)
 const CELL = +(arg.cell ?? 40);       // base facet size (mm)
 const OCT = +(arg.oct ?? 2);          // octaves
 const TILT = +(arg.tilt ?? 0.7);      // per-facet tilt (bigger = steeper facets)
-const MIX = +(arg.mix ?? 0.5);        // 1=all valleys(concave), 0=all peaks(convex), .5=both
+const DETAIL = +(arg.detail ?? 0.5); // 2nd-scale fold-line amount (more = more creases)
 const BIAS = +(arg.bias ?? 0.0);      // outward bias 0..1
-const WARP = +(arg.warp ?? 0.4);      // domain warp (0=grid-regular, larger=organic)
+const ROTA = +(arg.rot ?? 1);         // rotate domain per layer (1 = de-grid straight creases)
 const HOLLOW = +(arg.hollow ?? 0);    // 1 = subtract smooth inner cavity + open top
-const EL = +(arg.el ?? 1.8);          // voxel edge length (mm)
+const EL = +(arg.el ?? 1.6);          // voxel edge length (mm)
 const SEED = 7;
 
 function hash3(ix, iy, iz, salt) {
@@ -23,42 +23,41 @@ function hash3(ix, iy, iz, salt) {
   h = (Math.imul((h ^ (h >>> 13)) >>> 0, 1274126177)) >>> 0;
   return (h & 0xffffff) / 0xffffff;
 }
-// crumpled paper = envelope of random tilted planes (one per Voronoi cell).
-// Adjacent facets meet at sharp creases (the natural plane intersection) — no gouging.
-function octave(x, y, z, cell) {
-  const gx = x / cell, gy = y / cell, gz = z / cell;
+// fixed per-layer rotation (breaks grid alignment -> creases stay STRAIGHT but not axis-locked)
+function rotmat(seed) {
+  const a = hash3(seed, 9, 9, 41) * 6.2832, b = hash3(9, seed, 9, 42) * 6.2832, c = hash3(9, 9, seed, 43) * 6.2832;
+  const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b), cc = Math.cos(c), sc = Math.sin(c);
+  return [ca * cb, ca * sb * sc - sa * cc, ca * sb * cc + sa * sc,
+          sa * cb, sa * sb * sc + ca * cc, sa * sb * cc - ca * sc,
+          -sb, cb * sc, cb * cc];
+}
+const ROT = [0, 1, 2, 3, 4, 5, 6].map(rotmat);
+const ap = (R, x, y, z) => [R[0] * x + R[1] * y + R[2] * z, R[3] * x + R[4] * y + R[5] * z, R[6] * x + R[7] * y + R[8] * z];
+
+// envelope of random tilted planes over a (rotated) jittered lattice => FLAT facets + STRAIGHT creases.
+// sign>0 = max (convex: V-groove VALLEY creases); sign<0 = min (concave: RIDGE creases).
+function env(x, y, z, cell, salt, sign) {
+  let X = x, Y = y, Z = z;
+  if (ROTA) { const r = ap(ROT[salt], x, y, z); X = r[0]; Y = r[1]; Z = r[2]; }
+  const gx = X / cell, gy = Y / cell, gz = Z / cell;
   const ix = Math.floor(gx), iy = Math.floor(gy), iz = Math.floor(gz);
-  let mn = 1e9, mx = -1e9;
+  let best = sign > 0 ? -1e9 : 1e9;
   for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
     const cx = ix + dx, cy = iy + dy, cz = iz + dz;
-    const sx = cx + hash3(cx, cy, cz, 1), sy = cy + hash3(cx, cy, cz, 2), sz = cz + hash3(cx, cy, cz, 3);
-    const hc = hash3(cx, cy, cz, 7) * 2 - 1;
-    const tx = hash3(cx, cy, cz, 8) * 2 - 1, ty = hash3(cx, cy, cz, 9) * 2 - 1, tz = hash3(cx, cy, cz, 10) * 2 - 1;
+    const sx = cx + hash3(cx, cy, cz, salt * 4 + 1), sy = cy + hash3(cx, cy, cz, salt * 4 + 2), sz = cz + hash3(cx, cy, cz, salt * 4 + 3);
+    const hc = hash3(cx, cy, cz, salt * 4 + 7) * 2 - 1;
+    const tx = hash3(cx, cy, cz, salt * 4 + 8) * 2 - 1, ty = hash3(cx, cy, cz, salt * 4 + 9) * 2 - 1, tz = hash3(cx, cy, cz, salt * 4 + 10) * 2 - 1;
     const plane = hc + TILT * (tx * (gx - sx) + ty * (gy - sy) + tz * (gz - sz));
-    if (plane < mn) mn = plane; if (plane > mx) mx = plane;
+    if (sign > 0) { if (plane > best) best = plane; } else { if (plane < best) best = plane; }
   }
-  return MIX * mn + (1 - MIX) * mx;   // lower envelope (creased valleys) / upper (ridges)
+  return best;
 }
-// smooth value noise for domain warp (breaks grid alignment -> organic folds)
-function vnoise(x, y, z, salt) {
-  const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
-  const fx = x - ix, fy = y - iy, fz = z - iz;
-  const wx = fx * fx * (3 - 2 * fx), wy = fy * fy * (3 - 2 * fy), wz = fz * fz * (3 - 2 * fz);
-  let v = 0;
-  for (let dx = 0; dx <= 1; dx++) for (let dy = 0; dy <= 1; dy++) for (let dz = 0; dz <= 1; dz++)
-    v += hash3(ix + dx, iy + dy, iz + dz, salt) * (dx ? wx : 1 - wx) * (dy ? wy : 1 - wy) * (dz ? wz : 1 - wz);
-  return v * 2 - 1;
-}
+// flat facets bounded by straight fold lines; both valley (max) and ridge (min) creases.
 function crumple(x, y, z) {
-  // domain warp on the large scale
-  const ws = CELL * 0.6, wa = WARP * CELL;
-  const wx = wa * vnoise(x / ws, y / ws, z / ws, 21);
-  const wy = wa * vnoise(x / ws, y / ws, z / ws, 22);
-  const wz = wa * vnoise(x / ws, y / ws, z / ws, 23);
-  x += wx; y += wy; z += wz;
-  let total = 0, A = 1, cell = CELL, W = 0;
-  for (let o = 0; o < OCT; o++) { total += A * octave(x, y, z, cell); W += A; A *= 0.5; cell *= 0.5; }
-  return total / W + BIAS;   // ~[-1,1] (+bias)
+  let h = env(x, y, z, CELL, 1, +1) + env(x, y, z, CELL * 0.92, 2, -1);
+  let w = 2;
+  if (DETAIL > 0) { h += DETAIL * (env(x, y, z, CELL * 0.5, 3, +1) + env(x, y, z, CELL * 0.52, 4, -1)); w += 2 * DETAIL; }
+  return 0.62 * h / w + BIAS;   // ~[-1,1]
 }
 
 // pot-like truncated cone, axis = z, positive-inside SDF
@@ -82,7 +81,7 @@ if (HOLLOW) {
   pot = Manifold.difference(crumpled, inner);
 }
 const mesh = pot.getMesh();
-console.log(`AMP=${AMP} CELL=${CELL} OCT=${OCT} TILT=${TILT} MIX=${MIX} BIAS=${BIAS} HOLLOW=${HOLLOW} EL=${EL}`);
+console.log(`AMP=${AMP} CELL=${CELL} TILT=${TILT} DETAIL=${DETAIL} BIAS=${BIAS} ROT=${ROTA} HOLLOW=${HOLLOW} EL=${EL}`);
 console.log(`tris ${mesh.triVerts.length / 3}  vol ${(pot.volume() / 1000).toFixed(0)}cc  in ${Date.now() - t0}ms`);
 
 const vp = mesh.vertProperties, tv = mesh.triVerts, nt = tv.length / 3;
