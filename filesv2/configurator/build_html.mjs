@@ -27,6 +27,7 @@ const html = `<!DOCTYPE html>
   #hud .dim{color:#6cc08b;font-variant-numeric:tabular-nums}
   #hud .muted{color:#9aa0a8;font-size:11px;margin-top:6px}
   #busy{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.45);color:#fff;font-size:16px;z-index:20}
+  #err{display:none;position:fixed;left:10px;bottom:10px;right:10px;max-height:40%;overflow:auto;z-index:30;background:#3a1414;border:1px solid #a33;border-radius:8px;color:#ffb4b4;padding:10px;white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:12px}
   .lil-gui{--width:300px}
 </style>
 </head>
@@ -42,9 +43,15 @@ const html = `<!DOCTYPE html>
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@${V.three}/build/three.module.js",
   "delaunator": "https://cdn.jsdelivr.net/npm/delaunator@${V.delaunator}/+esm",
-  "lil-gui": "https://cdn.jsdelivr.net/npm/lil-gui@${V.lilgui}/+esm",
-  "jszip": "https://cdn.jsdelivr.net/npm/jszip@${V.jszip}/dist/jszip.min.js"
+  "lil-gui": "https://cdn.jsdelivr.net/npm/lil-gui@${V.lilgui}/+esm"
 }}
+</script>
+<div id="err"></div>
+<script>
+  // surface ANY error on screen (incl. failed module imports) instead of a black page
+  window.__showErr = (m) => { const e = document.getElementById('err'); if(!e) return; e.style.display = 'block'; e.textContent += m + '\\n'; };
+  addEventListener('error', (ev) => __showErr('ERROR: ' + (ev.message || ev.error) + (ev.filename ? (' @ ' + ev.filename + ':' + ev.lineno) : '')));
+  addEventListener('unhandledrejection', (ev) => __showErr('PROMISE: ' + (ev.reason && (ev.reason.stack || ev.reason.message || ev.reason))));
 </script>
 <script type="module">
 import * as THREE from 'three';
@@ -52,14 +59,13 @@ import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@${V.three}/exa
 import ManifoldModule from 'https://cdn.jsdelivr.net/npm/manifold-3d@${V.manifold}/manifold.js';
 import Delaunator from 'delaunator';
 import GUI from 'lil-gui';
-import JSZip from 'jszip';
 
 // ============================ inlined geometry.mjs ============================
 ${geometry}
 // ============================ inlined texture.mjs ============================
 ${texture}
 // ============================ app ============================
-const wasm = await ManifoldModule({ locateFile: () => 'https://cdn.jsdelivr.net/npm/manifold-3d@${V.manifold}/manifold.wasm' });
+const wasm = await ManifoldModule({ locateFile: (path) => path.endsWith('.wasm') ? 'https://cdn.jsdelivr.net/npm/manifold-3d@${V.manifold}/manifold.wasm' : path });
 wasm.setup();
 const Manifold = wasm.Manifold;
 
@@ -210,6 +216,7 @@ async function exportPartsZip() {
   busy.style.display = 'flex';
   await new Promise(r => setTimeout(r, 10));
   if (!cache) buildGeometry();
+  const { default: JSZip } = await import('https://cdn.jsdelivr.net/npm/jszip@${V.jszip}/+esm');
   const zip = new JSZip();
   // each planter as its own object, textured in its ARRAY frame but written at origin,
   // so reassembling the pieces in the array reproduces the seamless texture.
