@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # texturize.py — 给打印件外表面叠加"牛皮纸褶皱"质感(F2-F1 Voronoi 折痕 + 值噪声)
 #
-# 算法参考: ZhouWu-211/crumpled-paper-generator
-#   - 折痕 = 多倍频 3D 元胞噪声的 (F2-F1)(到最近/次近种子点的距离差) -> 尖锐直折痕;
-#   - 卷曲 = 值噪声(value noise)做大尺度起伏。
+# 算法参考(并对齐其 UI 滑块): ZhouWu-211/crumpled-paper-generator
+#   - 折痕 = 多倍频 3D 元胞噪声的【有符号】(F2-F1)×随机元胞符号 -> 一块块小平面/折痕(crackle);
+#   - 卷曲 = 值噪声(value noise)做大尺度起伏(curl)。
 # 安全策略:
 #   - 只位移"朝前/朝外的可见外壳"三角面; 盆内腔/顶/底/背/侧销区/内腔保持光滑;
 #   - 仅向外凸(disp>=0) -> 不减薄壁、不缩小盆腔, 配合与强度不受影响;
@@ -18,16 +18,21 @@ IN  = sys.argv[1] if len(sys.argv) > 1 else "planter_v5.stl"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "planter_v5_tex.stl"
 
 # ---- 可调参数 -------------------------------------------------------------
-# v5.4 纹理整体放大(对标 crumpled-paper-generator 的 density/intensity/octaves 滑块):
-#   比例更大 + 深度更大 + 密集度更低 + 起伏强度更大 + 褶皱层级更多 + 纸张整体弯曲更大。
-TARGET_EDGE = 2.0     # 细分目标边长(mm) 越小越细、面越多
-AMP         = 3.0     # 褶皱总振幅(mm, 仅外凸)  ← v5.4 1.8→3.0: 起伏更强、深度更大
-CELL        = 26.0    # Voronoi 折痕网络基准间距(mm, 大=平面大折痕疏)  ← v5.4 17→26: 密集度更低、整体比例放大
-OCTAVES     = 4       # 倍频数(每层间距减半、权重减半)  ← v5.4 3→4: 褶皱层级更多
-CREASE_W    = 0.30    # 折痕宽度(F2-F1 阈值, 越小折痕越细锐; 归一化量, 物理折痕宽随 CELL 一起放大)
-RIDGE_P     = 0.7     # 折痕锐化指数(<1 更锐)
-CURL        = 0.36    # 值噪声(大尺度卷曲)占比 0..1  ← v5.4 0.24→0.36: 纸张整体弯曲更大(波长=CELL×1.7 同步放大)
-TOOTH       = 0.12    # 细颗粒底纹占比(纸的肌理, 防死平面/没覆盖感)  ← v5.4 0.18→0.12: 突出放大后的大褶皱
+# v5.5 直接对齐参考工具 crumpled-paper-generator 的 5 个滑块(用户给定一组数值):
+#   网格分辨率 res=400 / 褶皱密集度 seeds=36 / 褶皱层级 octaves=5 / 起伏强度 intensity=0.7 / 纸张整体弯曲 curl=0。
+#   算法改为参考的【有符号 F2-F1 crackle】(每个元胞随机 ± -> 一块块小平面/折痕), 而非旧版的单向脊线网。
+#   3D 物体表面用我们的 3D 元胞噪声实现同一组合; 取 1 参考单位 = 1mm。
+#   仅外凸(用户要求): 纹理只把"前面板+花盆外壳+挡土唇"这层【向外 offset 出体积】, 花盆内腔/箱体内部不变。
+#   实现: 把有符号场按全局 p2..p98 归一化到 [0,1] 再 ×AMP -> disp>=0, 只加料、不减壁、不缩腔。
+SEEDS       = 36      # 褶皱密集度(种子数, 参考滑块) → 基准元胞 CELL = PAPER/√SEEDS
+OCTAVES     = 5       # 褶皱层级(参考滑块)
+INTENSITY   = 0.7     # 起伏强度(参考滑块) → 物理外凸振幅 AMP = 3.0×INTENSITY
+CURL        = 0.0     # 纸张整体弯曲(参考滑块; 0 = 不做大尺度起伏)
+PAPER       = 100.0   # 参考逻辑纸张尺寸(取单位=mm)
+FALLOFF     = 2.2     # 每层权重衰减(参考: weight = intensity / 2.2^oct)
+TARGET_EDGE = 1.6     # 细分目标边长(mm) 越小越细; 参考 res 拉满(400) → 取较细值以多解析高倍频
+CELL        = PAPER / SEEDS**0.5          # 基准 Voronoi 元胞间距(mm) ≈ 16.67 (octave0)
+AMP         = round(3.0 * INTENSITY, 2)   # 物理最大外凸(mm); intensity=0.7 → 2.1
 TAPER       = 4.0     # 与光滑面相邻边界的羽化宽度(mm)
 SEAM_BOOST  = 0.5     # 盆×箱相贯线处的振幅增强倍率(+50%, 柔和熔接)
 SEAM_SIGMA  = 16.0    # 增强带宽度(mm, 高斯)
@@ -177,9 +182,12 @@ def hash3(ix, iy, iz, salt=0):
     return (h & 0xffffff) / 0xffffff      # 0..1
 
 def cellular_f2f1(P, cell):
+    """3D 元胞 (F2-F1, 网格单位) + 最近元胞的随机符号(±)。
+       参考工具对每个元胞随机赋正/负, 使折痕成为一块块凸/凹的小平面(crackle)。"""
     g = P / cell
     gi = np.floor(g).astype(np.int64)
     f1 = np.full(len(P), 1e9); f2 = np.full(len(P), 1e9)
+    sign = np.ones(len(P))
     for dx in (-1,0,1):
         for dy in (-1,0,1):
             for dz in (-1,0,1):
@@ -187,11 +195,13 @@ def cellular_f2f1(P, cell):
                 jx = hash3(cx,cy,cz,1); jy = hash3(cx,cy,cz,2); jz = hash3(cx,cy,cz,3)
                 seed = np.stack([cx+jx, cy+jy, cz+jz], axis=1)
                 d = np.linalg.norm(g - seed, axis=1)
-                nf1 = np.minimum(f1, d)
-                f2 = np.minimum(f2, np.maximum(f1, d))
-                f2 = np.minimum(f2, np.where(d<f1, f1, 1e9))
-                f1 = nf1
-    return f2 - f1
+                cell_sign = np.where(hash3(cx,cy,cz,5) > 0.5, 1.0, -1.0)
+                closer = d < f1
+                f2   = np.where(closer, f1, f2)               # 旧 f1 退为 f2
+                f2   = np.where((~closer) & (d < f2), d, f2)   # 否则 d 可能成为新 f2
+                sign = np.where(closer, cell_sign, sign)
+                f1   = np.where(closer, d, f1)
+    return f2 - f1, sign
 
 def value_noise(P, cell):
     g = P / cell; gi = np.floor(g).astype(np.int64); fr = g - gi
@@ -207,19 +217,26 @@ def value_noise(P, cell):
                 val += h*wx*wy*wz
     return val   # 0..1
 
-def height(P):
-    """牛皮纸高度场 >=0: 多倍频 (1-F2F1) 形成尖脊折痕 + 值噪声卷曲。"""
-    crease = np.zeros(len(P)); amp=1.0; tot=0.0; cell=CELL
-    for o in range(OCTAVES):
-        d = cellular_f2f1(P, cell)
-        ridge = np.clip(1 - d/CREASE_W, 0, 1)**RIDGE_P  # 折痕处(F2≈F1)->1, 锐化
-        crease += amp*ridge; tot += amp
-        amp *= 0.55; cell *= 0.5
-    crease /= tot
-    curl  = value_noise(P, CELL*1.7)
-    tooth = value_noise(P, 5.0)               # 细颗粒底纹(纸的肌理, 防死平面)
-    h = (1-CURL-TOOTH)*crease + CURL*curl + TOOTH*tooth
-    return h * seam_gain(P)   # 接缝带柔和增强(折痕翻过盆×箱相贯线, 自然过渡)
+def signed_field(P):
+    """参考 crumpled-paper-generator 的有符号 F2-F1 折痕场(物理 mm):
+       每层 octave 种子数×4(间距÷2)、权重 INTENSITY/FALLOFF^oct, 每元胞随机 ± -> 小平面折痕;
+       可选大尺度卷曲 CURL(参考的双频值噪声)。返回有符号值(后续全局归一化到外凸)。"""
+    h = np.zeros(len(P))
+    for k in range(OCTAVES):
+        cell_k = CELL / (2.0**k)                   # 种子数×4 ⇔ 元胞间距÷2
+        d, sgn = cellular_f2f1(P, cell_k)
+        crackle = d * cell_k                       # (F2-F1) 物理折痕(mm)
+        w = INTENSITY / (FALLOFF**k)
+        h += crackle * w * sgn
+    if CURL > 0:                                   # 参考: valueNoise(·0.03)*15 + valueNoise(·0.08)*5
+        c = (2*value_noise(P, 1/0.03) - 1)*15.0 + (2*value_noise(P, 1/0.08) - 1)*5.0
+        h += c * CURL
+    return h
+
+# 全局归一化(p2..p98): 把有符号场映射到【仅外凸】[0,1] -> ×AMP (只加料、不减壁、不缩腔)
+_fv = signed_field(V)
+H_LO = float(np.percentile(_fv, 2.0)); H_HI = float(np.percentile(_fv, 98.0))
+print(f"折痕场 p2={H_LO:.3f} p98={H_HI:.3f}  CELL≈{CELL:.2f}mm AMP={AMP}mm 倍频={OCTAVES} 种子={SEEDS} curl={CURL}")
 
 # ---- 共形细分: 逐边一致的段数 + Delaunay 三角化 + 全局顶点焊接(水密) -----
 from scipy.spatial import Delaunay as _Del
@@ -321,7 +338,8 @@ for fi in range(F):
                 A,B = P3[a], P3[b]; AB = B-A; L = np.linalg.norm(AB)+1e-12
                 d = np.linalg.norm(np.cross(P-A, AB/L), axis=1)
                 mask = np.minimum(mask, np.clip(d/TAPER,0,1))
-        disp = AMP*height(P)*mask
+        t = np.clip((signed_field(P) - H_LO)/(H_HI - H_LO + 1e-9), 0, 1)
+        disp = AMP * t * mask * seam_gain(P)       # >=0: 仅外凸(offset 出体积)
         Pd = P + Nn*disp[:,None]
     else:
         Pd = P                                       # 光滑面: 仅做共形(不位移)

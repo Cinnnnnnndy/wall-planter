@@ -144,3 +144,15 @@ C. ✅ **背板网格减料**(back_lattice, 默认开): 背面 openwork 六角�
 - TOOTH  0.18→0.12: 细颗粒底纹↓ → 让放大后的大褶皱更突出(折痕占比 1-CURL-TOOTH≈0.52)。
 - 产物: planter_v5_tex.stl(二进制, 52610面, 拓扑/面数同旧版) + viewer_tex.html(可交互预览) + tex_v54_compare.png(放大前后对比)。
 - 重跑: cd filesv2 && python3 texturize.py planter_v5.stl planter_v5_tex.stl (需 numpy+scipy)。
+
+## v5.5 直接对齐参考工具滑块(texturize.py, 2026-06-13, 用户给定一组参考数值 + 拿到参考源码)
+> 拿到 crumpled-paper-generator/index.html 源码后, 把算法换成参考的【有符号 F2-F1 crackle】,
+> 而非旧版的单向脊线网(这才是参考"一块块小平面"的牛皮纸观感)。几何不变, 仍仅外凸。
+- 用户给定滑块: 网格分辨率400 / 褶皱密集度(种子)36 / 褶皱层级5 / 起伏强度0.7 / 纸张整体弯曲0。
+- 映射(1 参考单位=1mm): SEEDS=36 → CELL=PAPER/√SEEDS≈16.67mm; OCTAVES=5; FALLOFF=2.2(weight=intensity/2.2^oct);
+  每升一层种子数×4 ⇔ 元胞间距÷2; INTENSITY=0.7 → AMP=3.0×0.7=2.1mm; CURL=0(关大尺度卷曲); TARGET_EDGE 2.0→1.6(res 拉满)。
+- 算法: cellular_f2f1 改返回 (F2-F1, 每元胞随机±); signed_field=Σ crackle·(intensity/2.2^k)·sign;
+  全局 p2..p98 归一化到 [0,1]×AMP → disp>=0 仅外凸(只加料、不减壁、不缩腔)。curl 用参考双频值噪声(0.03/0.08), 当前=0。
+- 用户强调: 纹理只对【前面板+花盆外壳+挡土唇】向外 offset 出体积, 不影响花盆内腔/箱体内部(选面逻辑同前, 未变)。
+- 产物: planter_v5_tex.stl(二进制, 69514面) + viewer_tex.html(重建) + tex_v55_compare.png(v5.4脊线 vs v5.5小平面) + tex_v55.png(特写)。
+- 微调指南: 更密→SEEDS↑(CELL随√反比变小); 更深→INTENSITY↑(AMP=3×强度); 层级→OCTAVES; 要整体弯曲→CURL>0。
