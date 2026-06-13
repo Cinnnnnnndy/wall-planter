@@ -328,11 +328,12 @@ def remesh_panel():
         return d
     if len(lat):
         lat = lat[inside(lat) & (dist2seg(lat) > 0.5*TARGET_EDGE)]
-    P2 = np.concatenate([to2(bpts), lat],0)
+    lat3 = (p0[None,:] + lat[:,0:1]*a1[None,:] + lat[:,1:2]*a2[None,:]) if len(lat) else np.zeros((0,3))
+    P3all = np.concatenate([bpts, lat3], 0)   # 3D: 边界点用【精确原始坐标】(与锥壁/箱侧逐点一致才焊得上), 内部点=格点
+    P2 = to2(P3all)                            # 2D 仅用于 Delaunay 拓扑/内点判定(不用于焊接)
     kk = np.round(P2/2e-3).astype(np.int64); _,uq = np.unique(kk,axis=0,return_index=True)
-    P2 = P2[np.sort(uq)]
+    order = np.sort(uq); P2 = P2[order]; P3d = P3all[order]
     if len(P2) < 3: return
-    P3d = p0[None,:] + P2[:,0:1]*a1[None,:] + P2[:,1:2]*a2[None,:]
     tri = _Del(P2)
     mask = np.ones(len(P3d))                                         # 仅外框边羽化(孔边不羽化)
     for (va,vb) in outer:
