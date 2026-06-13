@@ -124,7 +124,7 @@ A. ✅ **连接筒止位环不顶缝**: 沉孔比环深 conn_recess=1.0mm(原0.6
    上下单元平面贴死; 修正 stack2 预览落座位(joint 渲染证实金/橙接触面一条直线=贴平)。
 B. ✅ **檐口下降**: mouth_ext 16->6, 盆口端沿盆轴降 10mm(≈竖直7.4mm), 收口贴近真盆口;
    mod_h 228.5->221.1(仍≤240); potcheck 仍空(真盆装得下)。想更贴: mouth_ext 再降到2。
-C. ✅ **背板网格减料**(back_lattice, 默认开): 背面 openwork 圆窗栅格皮(lat_cell/lat_wall/
+C. ✅ **背板网格减料**(back_lattice, 默认开): 背面 openwork 六角蜂窝窗皮(lat_cell=对边宽/lat_wall=筋/
    lat_border) + 其后楔形掏空腔(lat_ydepth 深, 默认30mm; 前部留实心=配重/强度)。
    仅储水腔以上(lat_zmin=res_h+wall+8); 盆外壳+lat_keep / 落水管+lat_keep / 储水盒 / 前壳
    lat_frontsk / 边框 / 顶部 lat_top(堆叠孔凸台)全保留; 经背面孔通外 -> Volumes=2 无封闭腔。

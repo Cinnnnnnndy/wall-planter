@@ -4,7 +4,7 @@
 //   A) 连接筒止位环沉孔加深 conn_recess=1.0(原0.6): 环顶更稳低于叠合面, 上下贴平不被顶开;
 //      修正 stack2 预览落座位(渲染真实贴合)。
 //   B) 檐口下降: mouth_ext 16->6, 盆口端沿盆轴降 10mm(≈竖直7.4mm), 贴近真盆口; mod_h->221.1。
-//   C) 背板网格减料(back_lattice): 背面 openwork 圆窗栅格皮 + 其后楔形掏空腔(lat_ydepth 深),
+//   C) 背板网格减料(back_lattice): 背面 openwork 六角蜂窝窗皮 + 其后楔形掏空腔(lat_ydepth 深),
 //      仅储水腔以上; 盆壁/落水管/储水盒/前壳/边框/前部配重全保留; 经背面孔通外=无封闭腔。
 //      自检 latticecheck(腔×储水盒/落水管)/latticepot(腔×盆腔) 应空。
 //  --- v5.2 基线 ---
@@ -258,18 +258,20 @@ module base() {
     }
 }
 
-// ---- 背板网格减料 v5.3: 圆窗六角错排, 仅背面/储水腔以上; 保护体确保不破 -------
+// ---- 背板网格减料 v5.3: 六角蜂窝窗(pointy-top, 蜂窝错排), 仅背面/储水腔以上 -------
 lat_zmin = wall + res_h + 8;                 // 网格下沿(储水腔顶板 z=wall+res_h 以上再留 8)
 module back_windows() {
-    px = lat_cell + lat_wall;  pz = px*0.87;  // 六角错排
+    R  = lat_cell/sqrt(3);                   // 六角外接圆半径(lat_cell=对边宽=flat-to-flat)
+    px = lat_cell + lat_wall;                // 行内水平中心距
+    pz = 1.5*R + lat_wall*0.87;              // 行距(蜂窝)
     z1 = mod_h - lat_top;  x0 = lat_border;  x1 = mod_w - lat_border;
-    nz = floor((z1 - lat_zmin - lat_cell)/pz);
+    nz = floor((z1 - lat_zmin - 2*R)/pz);
     for (iz = [0 : max(0,nz)]) {
-        zz = lat_zmin + lat_cell/2 + iz*pz;  xoff = (iz%2)*px/2;
+        zz = lat_zmin + R + iz*pz;  xoff = (iz%2)*px/2;
         nx = floor((x1 - x0 - lat_cell - xoff)/px);
         for (ix = [0 : max(0,nx)])
             translate([x0 + lat_cell/2 + xoff + ix*px, -1, zz])
-                rotate([-90,0,0]) cylinder(h = box_d + 2, d = lat_cell);
+                rotate([-90,0,0]) rotate([0,0,30]) cylinder(h = box_d + 2, r = R, $fn = 6);
     }
 }
 // 背面楔形掏空腔(连通、经背面网格孔通外, 无封闭腔); 盆壁/落水管/前壳/边框/前部配重保留
@@ -360,6 +362,6 @@ echo(str("连接筒: 外径=", conn_od, " 内水道=", conn_bore, " 总长=", 2*
 echo(str("稳定底座 W x 进深 = ", mod_w, " x ", box_d+base_reach_f+base_reach_b, "  ≤240? ",
          (box_d+base_reach_f+base_reach_b)<=240));
 echo(str("落水井→盆轴 x距=", cx-(shaft_x+shaft_d/2), " (shaftcheck 应空)"));
-echo(str("背板网格: ", back_lattice?"开":"关", " 窗Ø", lat_cell, " 筋", lat_wall, " 边框", lat_border,
+echo(str("背板网格: ", back_lattice?"开":"关", " 六角对边", lat_cell, " 筋", lat_wall, " 边框", lat_border,
          " 下沿z=", lat_zmin, "(储水顶z=", wall+res_h, "以上) 前壳留", lat_frontsk,
          " | latticecheck/latticepot 应空"));
