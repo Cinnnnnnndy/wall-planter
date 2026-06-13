@@ -5,15 +5,15 @@
 import { DEFAULTS, derive } from './geometry.mjs';
 
 export const CRUMPLE_DEFAULTS = {
-  amp: 9,        // fold depth (mm) — "deeper/exaggerated"
-  cell: 46,      // base facet size (mm)
-  oct: 2,        // octaves
-  tilt: 1.15,    // per-facet tilt (steeper facets)
-  mix: 0.5,      // 1 concave / 0 convex / .5 both
-  warp: 0.6,     // domain warp (organic, non-grid)
-  bias: 0.45,    // outward bias 0..1 (folds bulge out; keeps inner wall)
-  inClamp: 2.5,  // max inward displacement (mm) — protects the 3mm cup wall from breaching the cavity
-  el: 1.5,       // voxel edge length (mm)
+  amp: 9,        // fold depth (mm) — locked
+  cell: 58,      // big-fold facet size (mm) — large sweeping folds
+  fine: 0.2,     // subtle fine-wrinkle amount (0 = dead-flat facets, ~0.3 = busy)
+  tilt: 1.0,     // per-facet tilt
+  mix: 0.45,     // 1 concave / 0 convex / .5 both
+  warp: 0.55,    // domain warp (organic, non-grid)
+  bias: 0.42,    // outward bias 0..1 (folds bulge out; keeps inner wall)
+  inClamp: 2.5,  // max inward displacement (mm) — protects the 3mm cup wall
+  el: 1.3,       // voxel edge length (mm)
   seed: 7,
   offset: [0, 0, 0], // global/array offset -> seamless tiling
 };
@@ -54,9 +54,10 @@ function makeField(o) {
     const wy = wa * vnoise(x / ws, y / ws, z / ws, 22);
     const wz = wa * vnoise(x / ws, y / ws, z / ws, 23);
     x += wx; y += wy; z += wz;
-    let total = 0, A = 1, cell = o.cell, W = 0;
-    for (let i = 0; i < o.oct; i++) { total += A * octave(x, y, z, cell); W += A; A *= 0.5; cell *= 0.5; }
-    return total / W + o.bias;
+    // big sweeping folds (dominant) + medium variation + a subtle fine wrinkle
+    const big = 0.72 * octave(x, y, z, o.cell) + 0.28 * octave(x, y, z, o.cell * 0.5);
+    const fine = octave(x, y, z, o.cell * 0.26);
+    return big + o.fine * fine + o.bias;
   };
 }
 
