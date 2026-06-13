@@ -18,8 +18,8 @@ IN  = sys.argv[1] if len(sys.argv) > 1 else "planter_v5.stl"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "planter_v5_tex.stl"
 
 # ---- 可调参数 -------------------------------------------------------------
-# v5.6 对齐参考工具滑块 + 修两处问题(用户反馈):
-#   滑块: 网格分辨率400 / 褶皱密集度seeds36 / 褶皱层级oct5 / 起伏强度intensity=1.0 / 纸张整体弯曲curl增大。
+# v5.6 对齐参考工具滑块 + 修两处问题(用户反馈); v5.6.1 保留修复, 强度/弯曲回调到 v5.5 值。
+#   滑块: 网格分辨率400 / 褶皱密集度seeds36 / 褶皱层级oct5 / 起伏强度intensity=0.7 / 纸张整体弯曲curl=0。
 #   算法用参考的【有符号 F2-F1 crackle】(每元胞随机± -> 小平面折痕); 取 1 参考单位 = 1mm。
 #   仅外凸(用户要求): 只把"前面板+花盆外壳+挡土唇"向外 offset 出体积, 花盆内腔/箱体内部不变。
 #   【修复1】前面板原始网格是细长 fan 三角形(放射条纹) -> 对整块平面板【重新均匀网格化】(见 remesh_panel)。
@@ -27,8 +27,8 @@ OUT = sys.argv[2] if len(sys.argv) > 2 else "planter_v5_tex.stl"
 #   起伏强度=AMP(褶皱深度); 整体弯曲=CURL_AMP(独立低频外凸 swell, 叠加在褶皱上, 不削弱褶皱)。
 SEEDS       = 36      # 褶皱密集度(种子数, 参考滑块) → 基准元胞 CELL = PAPER/√SEEDS
 OCTAVES     = 5       # 褶皱层级(参考滑块)
-INTENSITY   = 1.0     # 起伏强度(参考滑块, 用户加到1) → 褶皱外凸深度 AMP = 3.0×INTENSITY
-CURL        = 0.5     # 纸张整体弯曲(参考滑块, 用户由0增大) → 低频 swell 振幅 CURL_AMP = 3.0×CURL
+INTENSITY   = 0.7     # 起伏强度(参考滑块) → 褶皱外凸深度 AMP = 3.0×INTENSITY  (v5.6.1 用户回调 1.0→0.7)
+CURL        = 0.0     # 纸张整体弯曲(参考滑块) → 低频 swell 振幅 CURL_AMP = 3.0×CURL  (v5.6.1 用户回调 0.5→0)
 PAPER       = 100.0   # 参考逻辑纸张尺寸(取单位=mm)
 FALLOFF     = 2.2     # 每层权重衰减(参考: weight = intensity / 2.2^oct)
 TARGET_EDGE = 1.6     # 细分目标边长(mm) 越小越细; 参考 res 拉满(400) → 取较细值以多解析高倍频
