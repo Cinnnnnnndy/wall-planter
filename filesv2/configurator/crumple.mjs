@@ -5,9 +5,9 @@
 import { DEFAULTS, derive } from './geometry.mjs';
 
 export const CRUMPLE_DEFAULTS = {
-  intensity: 0.2,  // 起伏强度 — fold depth multiplier (gentle, paper-like)
-  cell: 38,        // octave-0 Voronoi seed spacing (mm); smaller = denser folds
-  octaves: 5,      // 褶皱层级
+  intensity: 0.3,  // 起伏强度 — fold depth multiplier (deeper paper crumple)
+  cell: 56,        // octave-0 Voronoi seed spacing (mm); larger = bigger primary creases
+  octaves: 6,      // 褶皱层级 (more = finer sub-creases down the fractal)
   curl: 0,         // 纸张整体弯曲 — macro curl amount (0 = none)
   rot: 1,          // rotate domain per octave (de-grid)
   inClamp: 2.2,    // max inward displacement (mm) — protects the 3mm cup wall
