@@ -61,6 +61,8 @@ pin_clear = 0.35;    // 销比名义小(销径 = join_d - pin_clear)
 peg_dp    = 9;       // 上下堆叠孔深(单边)
 tile_dp   = 8;       // 左右横拼孔深(单边)
 pin_len   = 16;      // 单独插销长(两端各插 ~8)
+peg_wall  = 2.0;     // 底面堆叠孔在储水腔内的隔水套筒壁厚(防水从孔漏出)
+peg_cap   = 3.0;     // 套筒在孔顶以上的封盖厚(封住盲孔顶, 与储水盒隔离)
 
 /* [盆口挡土唇(默认关; 真盆自带边)] */
 lip_on   = false;
@@ -172,8 +174,12 @@ module unit() {
                     frustum(out_top + 2*lip_w - 2*drip_d2, out_top + 2*lip_w - 2*drip_d2, 3*drip_w);
                 }
 
-        // 2) 储水/排水腔(箱下部; 盆底经浸水窗探入)
-        translate([wall, wall, wall]) cube([mod_w - 2*wall, box_d - 2*wall, res_h]);
+        // 2) 储水/排水腔(箱下部; 盆底经浸水窗探入) — 底面堆叠孔处留实心套筒+顶盖, 与储水盒隔离(防水从孔漏)
+        difference() {
+            translate([wall, wall, wall]) cube([mod_w - 2*wall, box_d - 2*wall, res_h]);
+            for (sx = peg_xs)
+                translate([sx, peg_y, -1]) cylinder(h = peg_dp + 1 + peg_cap, d = join_d + join_clear + 2*peg_wall);
+        }
 
         // 3) 落水井 = 贯通竖管(穿透顶/底面)
         translate([shaft_x, shaft_y, -1]) cylinder(h = mod_h + 2, d = shaft_d);
@@ -346,6 +352,13 @@ else if (view=="rescheck") intersection(){                                     /
         translate([mod_w-tile_dp,peg_y,sz]) rotate([0,90,0]) cylinder(h=tile_dp+1,d=join_d+join_clear);
     }
 }
+else if (view=="pegcheck") intersection(){                                     // 底面堆叠孔×储水腔(加套筒后应空=不漏水)
+    difference(){                                                              // 实际储水腔(已挖隔水套筒)
+        translate([wall,wall,wall]) cube([mod_w-2*wall, box_d-2*wall, res_h]);
+        for(sx=peg_xs) translate([sx,peg_y,-1]) cylinder(h=peg_dp+1+peg_cap, d=join_d+join_clear+2*peg_wall);
+    }
+    for(sx=peg_xs) translate([sx,peg_y,-1]) cylinder(h=peg_dp+1, d=join_d+join_clear);
+}
 else if (view=="latticecheck") intersection(){                                 // 背板掏空腔×(储水盒∪落水管)(应空)
     union(){ translate([wall,wall,wall]) cube([mod_w-2*wall, box_d-2*wall, res_h]);
              translate([shaft_x,shaft_y,-1]) cylinder(h=mod_h+2, d=shaft_d); }
@@ -353,6 +366,7 @@ else if (view=="latticecheck") intersection(){                                 /
 }
 else if (view=="latticepot") intersection(){ cavity_inflated(0.8); back_hollow(); }  // 掏空腔×盆腔(应空=不破盆)
 else if (view=="latcut")   keep_x(shaft_x) unit();                              // 含网格的纵剖
+else if (view=="pegsec")   slab_x(peg_xs[0]) unit();                             // 过底面堆叠孔的纵剖(看隔水套筒)
 
 // ---- 尺寸 / 配合 自检 ----------------------------------------------
 echo(str("单元 W x H = ", mod_w, " x ", mod_h, "  真实进深 tot_d=", tot_d, "  三轴≤240? ",
