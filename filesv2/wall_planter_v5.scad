@@ -56,11 +56,15 @@ conn_recess   = 1.0;           // 止位环顶低于叠合面的量(沉孔比环
 
 /* [定位: 原模型只留孔, 销单独打印] */
 join_d    = 7;       // 定位孔名义径(堆叠/横拼通用)
-join_clear= 0.5;     // 孔比名义大
-pin_clear = 0.35;    // 销比名义小(销径 = join_d - pin_clear)
+join_clear= 0.5;     // 孔比名义大 => 孔径 = join_d+join_clear = 7.5mm (已打印进盆体, 不要改)
+// 插销改成"按孔定径": 旧版销=join_d-0.35=6.65, 对 Ø7.5 孔差 0.85mm 太松会晃。
+// 现在销径 = 孔径 - pin_fit, 只调 pin_fit 一个值; 先打 view="pintest" 测试销挑最紧能插进的, 再回填。
+pin_fit   = 0.2;     // 销与孔配合间隙(销径=孔径-pin_fit): 0.2->销7.3; 更紧改0.1(销7.4), 更松改0.3(销7.2)
+pin_od    = join_d + join_clear - pin_fit;    // 生产插销外径(默认)
+pin_test_ds = [7.1, 7.2, 7.3, 7.4];           // view="pintest" 一排测试销直径(挑最紧仍能插进 Ø7.5 孔的那根)
 peg_dp    = 9;       // 上下堆叠孔深(单边)
 tile_dp   = 8;       // 左右横拼孔深(单边)
-pin_len   = 16;      // 单独插销长(两端各插 ~8)
+pin_len   = 15;      // 单独插销长(两端各插~7.5; 比双侧孔合计16浅1mm, 保证上下/左右贴平不被销顶开)
 peg_wall  = 2.0;     // 底面堆叠孔在储水腔内的隔水套筒壁厚(防水从孔漏出)
 peg_cap   = 3.0;     // 套筒在孔顶以上的封盖厚(封住盲孔顶, 与储水盒隔离)
 
@@ -89,7 +93,7 @@ lat_ydepth   = 30;     // 背面掏空深(仅 back_lattice=true 时生效)
 dev      = true;
 show_pot = false;
 view     = "unit";   // unit/cutx/watercut/slabx/stack/stackcut/tile2/base/tower/
-                     // towercut/wall33/connector/pin/parts/potcheck/shaftcheck/
+                     // towercut/wall33/connector/pin/pintest/parts/potcheck/shaftcheck/
                      // tilecheck/rescheck/latticecheck/latticepot/latcut
 $fn = dev ? 40 : 96;
 
@@ -228,9 +232,8 @@ module connector() {
         translate([0,0,-1]) cylinder(h = 2*conn_sock + conn_flange_h + 2, d = conn_bore); // 内水道
     }
 }
-// 通用插销(堆叠/横拼共用): 两端倒角易插
-module pin() {
-    d = join_d - pin_clear;
+// 通用插销(堆叠/横拼共用): 两端倒角易插。d 默认 = pin_od(生产径), 测试时传不同直径。
+module pin(d = pin_od) {
     rotate_extrude($fn=48)
         polygon([[0,0],[d/2-1,0],[d/2,1],[d/2,pin_len-1],[d/2-1,pin_len],[0,pin_len]]);
 }
@@ -240,10 +243,22 @@ module parts_plate() {
     for (i=[0:5]) translate([conn_flange_d + 6 + (i%3)*12, floor(i/3)*pin_len*0+ (i%3)*0 + floor(i/3)*14, 0])
         translate([0, floor(i/3)*16, 0]) pin();
 }
+// 测试销拼版(view="pintest"): 一排不同直径的销立在一条基板上, 基板前沿阳刻销径。
+// 打出来逐根插进现有 Ø7.5 孔, 挑"最紧但还能插到底"的那根, 把它的直径回填到 pin_fit。
+module pin_test() {
+    n = len(pin_test_ds);
+    pitch = 16;
+    translate([-7, -7, 0]) cube([pitch*(n-1) + 14, 14, 1.6]);     // 整体一件的基板
+    for (i = [0:n-1]) {
+        d = pin_test_ds[i];
+        translate([i*pitch, 0, 1.6]) pin(d);                      // 测试销立在基板上
+        translate([i*pitch, -6.4, 1.6])                           // 销径标号(如 7.3)阳刻
+            linear_extrude(0.8) text(str(d), size=4, halign="center", valign="baseline");
+    }
+}
 
 module base() {
     by0 = -base_reach_b; byL = box_d + base_reach_f - by0;
-    pin_d = join_d - pin_clear;
     union() {
         difference() {
             union() {
@@ -263,8 +278,9 @@ module base() {
             translate([shaft_x, shaft_y, -1]) cylinder(h = base_h + 2, d = shaft_d + 1);
         }
         // 顶面定位销(向上插入最底层底孔; 在底座上向上打印免支撑)
+        // 销径=pin_od(同测试结果); 高 peg_dp-0.5=8.5 插进 9 深底孔(留0.5底隙不顶底, 比原8更咬合)
         for (sx = peg_xs)
-            translate([sx, peg_y, base_h - base_deck]) cylinder(h = peg_dp - 1, d = pin_d);
+            translate([sx, peg_y, base_h - base_deck]) cylinder(h = peg_dp - 0.5, d = pin_od);
     }
 }
 
@@ -332,6 +348,7 @@ else if (view=="towercut") keep_x(shaft_x) tower(3);
 else if (view=="wall33")   wall33();
 else if (view=="connector") connector();
 else if (view=="pin")      pin();
+else if (view=="pintest")  pin_test();
 else if (view=="parts")    parts_plate();
 else if (view=="potcheck")  intersection(){ unit(); pot_real(); }            // 应空
 else if (view=="shaftcheck") intersection(){                                   // 应空
@@ -377,6 +394,8 @@ echo(str("横拼孔高度 tile_zs=", tile_zs, "  储水顶板 z=", wall+res_h,
          "  全在储水以上? ", (tile_zs[0]>wall+res_h) && (tile_zs[1]>wall+res_h), " (#4 密封)"));
 echo(str("连接筒: 外径=", conn_od, " 内水道=", conn_bore, " 总长=", 2*conn_sock+conn_flange_h,
          " 止位环Ø", conn_flange_d, " | 井径=", shaft_d));
+echo(str("插销: 孔径=", join_d+join_clear, " 生产销径 pin_od=", pin_od, " (pin_fit=", pin_fit,
+         ") 长=", pin_len, " | 先打 view=pintest 测试销=", pin_test_ds, " 挑紧的回填 pin_fit"));
 echo(str("稳定底座 W x 进深 = ", mod_w, " x ", box_d+base_reach_f+base_reach_b, "  ≤240? ",
          (box_d+base_reach_f+base_reach_b)<=240));
 echo(str("落水井→盆轴 x距=", cx-(shaft_x+shaft_d/2), " (shaftcheck 应空)"));
