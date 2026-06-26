@@ -72,7 +72,8 @@ peg_cap   = 3.0;     // 套筒在孔顶以上的封盖厚(封住盲孔顶, 与�
 lip_on   = false;
 lip_w    = 6; lip_t = 4; drip_w = 1.6; drip_d2 = 2.2;
 
-/* [稳定底座 — 单独打印, 顶面销向上插入最底层底孔, 中部留排水] */
+/* [稳定底座 — 单独打印, 顶面销向上插入最底层底孔] */
+base_drain   = false; // 底座中部排水孔: false=堵死(实底, 不往托盘漏水); true=开孔(井口朝下排到托盘)
 base_reach_f = 112;  // 前伸(抗前倒)
 base_reach_b = 58;   // 后伸(兜盆底 stub)
 base_h       = 16;
@@ -274,8 +275,9 @@ module base() {
                 translate([cx - base_wall/2, by0, 0]) cube([base_wall, byL, base_h - base_deck]);
                 translate([0, box_d/2 - base_wall/2, 0]) cube([mod_w, base_wall, base_h - base_deck]);
             }
-            // 中部排水清空腔(最底层井口朝下排水到托盘, 不顶住)
-            translate([shaft_x, shaft_y, -1]) cylinder(h = base_h + 2, d = shaft_d + 1);
+            // 中部排水孔(最底层井口朝下排水到托盘, 不顶住); base_drain=false 时堵死=实底不漏水
+            if (base_drain)
+                translate([shaft_x, shaft_y, -1]) cylinder(h = base_h + 2, d = shaft_d + 1);
         }
         // 顶面定位销(向上插入最底层底孔; 在底座上向上打印免支撑)
         // 销径=pin_od(同测试结果); 高 peg_dp-0.5=8.5 插进 9 深底孔(留0.5底隙不顶底, 比原8更咬合)
