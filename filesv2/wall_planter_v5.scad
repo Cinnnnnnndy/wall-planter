@@ -94,7 +94,7 @@ lat_ydepth   = 30;     // 背面掏空深(仅 back_lattice=true 时生效)
 dev      = true;
 show_pot = false;
 view     = "unit";   // unit/cutx/watercut/slabx/stack/stackcut/tile2/base/tower/
-                     // towercut/wall33/connector/pin/pintest/parts/potcheck/shaftcheck/
+                     // towercut/wall33/connector/connectors_plate/pin/pintest/parts/potcheck/shaftcheck/
                      // tilecheck/rescheck/latticecheck/latticepot/latcut
 $fn = dev ? 40 : 96;
 
@@ -221,7 +221,8 @@ module unit() {
 // ---- 单独打印件: 层间连接筒 / 插销 / 底座 ------------------------------
 // 层间连接筒: 中空管 + 中部止位环; 下半插下层井口(止位环坐沉孔, 叠合贴平),
 // 上半露出插进上层井底。水从上层经筒内 Ø conn_bore 落到下层, 接缝密封不漏。
-conn_fit = shaft_d - 0.8;        // 连接筒插入段外径(滑配进 Ø shaft_d 井, ~0.4 单边隙)
+conn_fit_adj = 0.3;              // 连接筒插入段与井壁配合间隙(同 pin_fit 逻辑): 减小=更紧; 孔径=shaft_d=23, 插入径=shaft_d-conn_fit_adj
+conn_fit = shaft_d - conn_fit_adj;  // 连接筒插入段外径(默认22.7, ~0.15mm单边隙; 原0.8=22.2太松)
 module connector() {
     difference() {
         union() {
@@ -232,6 +233,12 @@ module connector() {
         }
         translate([0,0,-1]) cylinder(h = 2*conn_sock + conn_flange_h + 2, d = conn_bore); // 内水道
     }
+}
+// 水路连接筒拼版: 3×3 墙面共 6 个(3 列 × 每列 2 道竖缝), 一次打完
+module connectors_plate() {
+    pitch = conn_flange_d + 5;   // 间距(~31mm)
+    for (r = [0:1], c = [0:2])
+        translate([c*pitch, r*pitch, 0]) connector();
 }
 // 通用插销(堆叠/横拼共用): 两端倒角易插。d 默认 = pin_od(生产径), 测试时传不同直径。
 module pin(d = pin_od) {
@@ -348,8 +355,9 @@ else if (view=="base")     base();
 else if (view=="tower")    tower(3);
 else if (view=="towercut") keep_x(shaft_x) tower(3);
 else if (view=="wall33")   wall33();
-else if (view=="connector") connector();
-else if (view=="pin")      pin();
+else if (view=="connector")        connector();
+else if (view=="connectors_plate") connectors_plate();
+else if (view=="pin")              pin();
 else if (view=="pintest")  pin_test();
 else if (view=="parts")    parts_plate();
 else if (view=="potcheck")  intersection(){ unit(); pot_real(); }            // 应空
@@ -394,8 +402,9 @@ echo(str("盆腔: 口径=", in_top, " 底径=", in_bot, " 深=", pot_height, " |
          (in_bot-pot_bot_d)/2, " 口=", (in_top-pot_top_d)/2, " mm"));
 echo(str("横拼孔高度 tile_zs=", tile_zs, "  储水顶板 z=", wall+res_h,
          "  全在储水以上? ", (tile_zs[0]>wall+res_h) && (tile_zs[1]>wall+res_h), " (#4 密封)"));
-echo(str("连接筒: 外径=", conn_od, " 内水道=", conn_bore, " 总长=", 2*conn_sock+conn_flange_h,
-         " 止位环Ø", conn_flange_d, " | 井径=", shaft_d));
+echo(str("连接筒: 插入径=", conn_fit, "(conn_fit_adj=", conn_fit_adj, ") 内水道=", conn_bore,
+         " 总长=", 2*conn_sock+conn_flange_h, " 止位环Ø", conn_flange_d, " | 井径=", shaft_d,
+         " 单边隙=", (shaft_d-conn_fit)/2));
 echo(str("插销: 孔径=", join_d+join_clear, " 生产销径 pin_od=", pin_od, " (pin_fit=", pin_fit,
          ") 长=", pin_len, " | 先打 view=pintest 测试销=", pin_test_ds, " 挑紧的回填 pin_fit"));
 echo(str("稳定底座 W x 进深 = ", mod_w, " x ", box_d+base_reach_f+base_reach_b, "  ≤240? ",
