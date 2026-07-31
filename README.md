@@ -11,7 +11,8 @@
 
 ## 当前文件
 - **`filesv2/wall_planter_v4.scad`** — 当前基础(单元 164×183×191mm,三轴 ≤240,`Volumes=2`)。
-- `filesv2/planter_v4.stl` — 导出的可打印件。
+- `filesv2/planter_v4.3mf` — 导出的可打印件(**推荐**,带 mm 单位,直接拖进拓竹 Bambu Studio / 其它切片软件)。
+- `filesv2/planter_v4.stl` — 同一几何的 STL 版本(兼容老工具链)。
 - `filesv2/PROMPT.md` — 几何形态描述 + 已完成/待办清单。
 - `files/SPEC.md`、`files/CLAUDE.md` — 设计目标与建模迭代规范。
 - `files/` 内为早期 v2 迭代(竖切开口版),供参考。
@@ -25,7 +26,9 @@ cd filesv2
 # 立体预览
 openscad --render -o v4_hero.png --colorscheme=Tomorrow \
   --imgsize=1000,820 --camera=82,150,150,62,0,225,720 wall_planter_v4.scad
-# 导出 STL(出图确认后)
+# 导出 3MF(出图确认后,推荐)
+openscad --render -o planter_v4.3mf -D 'dev=false' wall_planter_v4.scad
+# 导出 STL(同一几何,兼容用)
 openscad --render -o planter_v4.stl -D 'dev=false' wall_planter_v4.scad
 ```
 开发期保持 `dev=true`(低精度快预览),导 STL 前用 `-D 'dev=false'` 提精度。
